@@ -145,7 +145,7 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
   },
   {
     name: "add_notes_to_clip",
-    description: "Add MIDI notes to a clip. Each note is [pitch, start_time, duration, velocity, mute]. Pitch: 0-127. Start_time and duration in beats. Velocity: 0-127.",
+    description: "Add MIDI notes to a clip. Each note is an object: {pitch, start_time, duration, velocity, mute}. Pitch: 0-127. Start_time/duration in beats. Velocity: 0-127.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {
@@ -153,8 +153,17 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
         clip_index: { type: SchemaType.NUMBER },
         notes: {
           type: SchemaType.ARRAY,
-          description: "Array of [pitch, start_time, duration, velocity, mute] arrays",
-          items: { type: SchemaType.NUMBER },
+          description: "Array of note objects",
+          items: {
+            type: SchemaType.OBJECT,
+            properties: {
+              pitch: { type: SchemaType.NUMBER },
+              start_time: { type: SchemaType.NUMBER },
+              duration: { type: SchemaType.NUMBER },
+              velocity: { type: SchemaType.NUMBER },
+              mute: { type: SchemaType.BOOLEAN },
+            },
+          },
         },
       },
       required: ["track_index", "clip_index", "notes"],
@@ -406,6 +415,32 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
         value: { type: SchemaType.NUMBER, description: "New value. Will be clamped to parameter min/max." },
       },
       required: ["track_index", "device_index", "param_name", "value"],
+    },
+  },
+
+  // ─── Audio-to-MIDI Transcription ───────────────────────────────────────────
+  {
+    name: "transcribe_audio",
+    description: "Transcribe hummed or whistled audio to MIDI notes using AI pitch detection. Use this when the user records audio via the mic button. Returns notes that can be added to a clip.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64-encoded audio data (WebM or WAV)" },
+        input_format: { type: SchemaType.STRING, description: "Audio format: 'webm' or 'wav' (default: webm)" },
+        tempo_bpm: { type: SchemaType.NUMBER, description: "Tempo for beat conversion (default: 120)" },
+      },
+      required: ["audio_data"],
+    },
+  },
+  {
+    name: "load_midi_notes",
+    description: "Load MIDI notes from a saved transcription file by midi_id. Use this when you have a midi_id from a user's hummed melody and need to get the actual notes to add to a clip.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        midi_id: { type: SchemaType.STRING, description: "The midi_id from a previous transcription (e.g., 'melody_abc12345')" },
+      },
+      required: ["midi_id"],
     },
   },
 ];

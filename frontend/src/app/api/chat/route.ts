@@ -3,6 +3,42 @@ import { NextRequest, NextResponse } from "next/server";
 import { sendAbletonCommand } from "@/lib/ableton";
 import { WONDER_TOOL_DECLARATIONS } from "@/lib/wonderTools";
 
+// Python REST API server URL
+const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
+
+// Compact summary of transcribed notes
+interface NotesSummary {
+  note_count: number;
+  pitch_range?: [string, string];
+  duration_beats?: number;
+  first_notes?: string[];
+}
+
+// MIDI context passed from frontend (lightweight reference instead of full notes)
+interface MidiContext {
+  midi_id: string;
+  midi_path: string;
+  note_count: number;
+  notes_summary: NotesSummary;
+  suggested_clip_length: number;
+  tempo_bpm: number;
+}
+
+// Call Python REST API for non-Ableton tools (like load_midi_notes)
+async function callPythonApi(endpoint: string, args: Record<string, unknown>): Promise<unknown> {
+  const res = await fetch(`${PYTHON_API_URL}${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
+  
+  if (!res.ok) {
+    throw new Error(`Python API error: ${res.status} ${res.statusText}`);
+  }
+  
+  return res.json();
+}
+
 const WONDER_SYSTEM_PROMPT = `You are Wonder — an AI music production copilot embedded in Ableton Live.
 You are "Cursor for music production."
 
@@ -33,9 +69,8 @@ Serum 808 design — after getting parameters, set approximately:
 Always call get_device_parameters first to find the exact parameter indices for the loaded Serum patch.
 
 ## MIDI note format for add_notes_to_clip
-Notes MUST be arrays of arrays:
-  [[pitch, start_time, duration, velocity, mute], ...]
-  Example: [[36, 0.0, 0.5, 110, false], [36, 1.0, 0.5, 105, false]]
+Notes MUST be objects:
+  [{"pitch":36,"start_time":0.0,"duration":0.5,"velocity":110,"mute":false}, ...]
   - pitch: integer 0-127
   - start_time: float beats (0.0 = beat 1, 1.0 = beat 2)
   - duration: float beats (0.25=16th, 0.5=8th, 1.0=quarter)
@@ -48,60 +83,123 @@ Kick:36, Snare:38, HH closed:42, HH open:46, Clap:39, Crash:49, Ride:51
 ## Scales (intervals from root)
 Minor: 0,2,3,5,7,8,10 | Pentatonic minor: 0,3,5,7,10 | Major: 0,2,4,5,7,9,11`;
 
+// Build compact context for transcribed MIDI (token-optimized)
+function buildMidiContext(ctx: MidiContext): string {
+  const pitchRange = ctx.notes_summary.pitch_range 
+    ? `${ctx.notes_summary.pitch_range[0]} to ${ctx.notes_summary.pitch_range[1]}`
+    : "unknown";
+  const firstNotes = ctx.notes_summary.first_notes?.join(", ") || "unknown";
+  
+  return `
+
+USER'S HUMMED MELODY (midi_id: ${ctx.midi_id}):
+- ${ctx.note_count} notes detected
+- Pitch range: ${pitchRange}
+- Duration: ${ctx.notes_summary.duration_beats?.toFixed(1) || "?"} beats
+- First notes: ${firstNotes}
+- Suggested clip length: ${ctx.suggested_clip_length} beats
+- Detected tempo: ${ctx.tempo_bpm} BPM
+
+TO ADD THIS MELODY TO ABLETON:
+1. First call load_midi_notes with midi_id="${ctx.midi_id}" to get the notes array
+2. Create a MIDI track and clip
+3. Use add_notes_to_clip with the notes array from step 1`;
+}
+
 const MAX_TOOL_ROUNDS = 10;
 
 /**
- * Normalize notes Gemini sends — it sometimes sends objects instead of arrays.
- * Ableton expects [[pitch, start, duration, velocity, mute], ...]
+ * Normalize notes Gemini sends into object format the Remote Script expects.
+ * AbletonMCP expects [{ pitch, start_time, duration, velocity, mute }, ...]
  */
-function normalizeNotes(notes: unknown): unknown[][] {
-  if (!Array.isArray(notes)) return [];
-  return notes.map((n) => {
-    if (Array.isArray(n)) return n;
+function normalizeNotes(notes: unknown): Array<Record<string, unknown>> {
+  let rawNotes: unknown = notes;
+
+  if (rawNotes && typeof rawNotes === "object" && !Array.isArray(rawNotes)) {
+    const container = rawNotes as { notes?: unknown; result?: { notes?: unknown } };
+    if (Array.isArray(container.notes)) {
+      rawNotes = container.notes;
+    } else if (container.result && Array.isArray(container.result.notes)) {
+      rawNotes = container.result.notes;
+    }
+  }
+
+  if (!Array.isArray(rawNotes)) return [];
+
+  return rawNotes.map((n) => {
+    if (Array.isArray(n)) {
+      return {
+        pitch: Number(n[0] ?? 60),
+        start_time: Number(n[1] ?? 0),
+        duration: Number(n[2] ?? 0.25),
+        velocity: Number(n[3] ?? 100),
+        mute: Boolean(n[4] ?? false),
+      };
+    }
     if (typeof n === "object" && n !== null) {
       const o = n as Record<string, unknown>;
-      return [
-        Number(o.pitch ?? o.note ?? 60),
-        Number(o.start_time ?? o.start ?? 0),
-        Number(o.duration ?? 0.25),
-        Number(o.velocity ?? 100),
-        Boolean(o.mute ?? false),
-      ];
+      return {
+        pitch: Number(o.pitch ?? o.note ?? 60),
+        start_time: Number(o.start_time ?? o.start ?? 0),
+        duration: Number(o.duration ?? 0.25),
+        velocity: Number(o.velocity ?? 100),
+        mute: Boolean(o.mute ?? false),
+      };
     }
-    return n;
+
+    return {
+      pitch: 60,
+      start_time: 0,
+      duration: 0.25,
+      velocity: 100,
+      mute: false,
+    };
   });
 }
 
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ content: "GEMINI_API_KEY not set in .env.local" }, { status: 500 });
+    return NextResponse.json({ content: "GEMINI_API_KEY not set" }, { status: 500 });
   }
 
   try {
-    const { messages } = await req.json() as {
+    const { messages, midiContext } = await req.json() as {
       messages: Array<{ role: "user" | "assistant"; content: string }>;
+      midiContext?: MidiContext;
     };
+
+    // Build system prompt, optionally including MIDI context (lightweight)
+    let systemPrompt = WONDER_SYSTEM_PROMPT;
+    if (midiContext && midiContext.note_count > 0) {
+      systemPrompt += buildMidiContext(midiContext);
+    }
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
-      systemInstruction: WONDER_SYSTEM_PROMPT,
+      systemInstruction: systemPrompt,
       tools: [{ functionDeclarations: WONDER_TOOL_DECLARATIONS }],
       toolConfig: { functionCallingConfig: { mode: FunctionCallingMode.AUTO } },
     });
 
-    // Gemini requires history to start with role "user" — strip any leading
-    // assistant messages (e.g. the initial greeting injected by the frontend).
-    const rawHistory: Content[] = messages.slice(0, -1).map((m) => ({
+    // Convert prior messages to Gemini history format (all except the last)
+    // Filter to ensure we only include valid messages
+    const validMessages = messages.filter((m) => m.content && m.content.trim());
+    
+    if (validMessages.length === 0) {
+      return NextResponse.json({ content: "No message provided" }, { status: 400 });
+    }
+
+    const history: Content[] = validMessages.slice(0, -1).map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: m.content }],
     }));
-    const firstUserIdx = rawHistory.findIndex((m) => m.role === "user");
-    const history: Content[] = firstUserIdx >= 0 ? rawHistory.slice(firstUserIdx) : [];
+    const firstUserIdx = history.findIndex((m) => m.role === "user");
+    const sanitizedHistory: Content[] = firstUserIdx >= 0 ? history.slice(firstUserIdx) : [];
 
-    const lastMessage = messages[messages.length - 1];
-    const chat = model.startChat({ history });
+    const lastMessage = validMessages[validMessages.length - 1];
+    const chat = model.startChat({ history: sanitizedHistory });
 
     // ── Agentic loop ──────────────────────────────────────────────────────────
     let response = await chat.sendMessage(lastMessage.content);
@@ -126,11 +224,29 @@ export async function POST(req: NextRequest) {
             args.notes = normalizeNotes(args.notes);
           }
 
+          // Auto-load notes from midi_id if Gemini forgot to pass notes
+          if (call.name === "add_notes_to_clip" && !args.notes && typeof args.midi_id === "string") {
+            const loaded = await callPythonApi("/api/load_midi_notes", { midi_id: args.midi_id });
+            if (loaded && typeof loaded === "object" && Array.isArray((loaded as { notes?: unknown[] }).notes)) {
+              args.notes = normalizeNotes((loaded as { notes: unknown[] }).notes);
+            }
+          }
+
           console.log(`[Wonder] → ${call.name}`, JSON.stringify(args).slice(0, 200));
 
           try {
-            const result = await sendAbletonCommand(call.name, args);
-            console.log(`[Wonder] ✓ ${call.name}:`, JSON.stringify(result).slice(0, 100));
+            let result: unknown;
+
+            // Route to appropriate backend based on tool name
+            if (call.name === "load_midi_notes") {
+              // Call Python REST API for MIDI file operations
+              result = await callPythonApi("/api/load_midi_notes", args);
+            } else {
+              // Call Ableton socket for all other tools
+              result = await sendAbletonCommand(call.name, args);
+            }
+
+            console.log(`[Wonder] Result for ${call.name}:`, result);
             return {
               functionResponse: {
                 name: call.name,
@@ -140,7 +256,6 @@ export async function POST(req: NextRequest) {
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             console.error(`[Wonder] ✗ ${call.name}: ${msg}`);
-            // Return the full error so Gemini can read it and adapt
             return {
               functionResponse: {
                 name: call.name,
@@ -171,7 +286,7 @@ function getHint(toolName: string, error: string): string {
   if (toolName === "add_notes_to_clip") {
     if (error.includes("No clip")) return "You must call create_clip first, then add_notes_to_clip.";
     if (error.includes("index") || error.includes("range")) return "Check track_index and clip_index — call get_session_info to verify track count.";
-    return "Ensure notes is an array of [pitch, start_time, duration, velocity, mute] arrays and the clip was created first with create_clip.";
+    return "Ensure notes is an array of objects with pitch/start_time/duration/velocity/mute and the clip was created first with create_clip.";
   }
   if (toolName === "create_midi_track" || toolName === "create_audio_track") {
     return "Call get_session_info first and use track_count as the index.";
