@@ -15,7 +15,7 @@ export default function Home() {
         <div className="flex items-center gap-3">
           <span className="w-1.5 h-1.5 bg-[#C1E1C1] border border-[#2D2D2D] rounded-full" />
           <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] opacity-40">
-            Wonder Core v1.0 // Gemini-2.0-Flash
+            Wonder Core v1.0 // Gemini-2.5-Flash
           </span>
         </div>
         <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] opacity-30">

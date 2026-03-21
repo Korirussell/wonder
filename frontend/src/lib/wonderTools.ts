@@ -356,4 +356,56 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ["track_index", "file_path"],
     },
   },
+
+  // ─── VST3 / AU Plugin Support ──────────────────────────────────────────────
+  {
+    name: "search_plugins",
+    description: "Search for VST3, AU, or Max plugins by name in the Ableton browser. Use this to discover available plugins before loading.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        query: { type: SchemaType.STRING, description: "Plugin name to search for (partial match). Empty returns all." },
+        plugin_type: { type: SchemaType.STRING, description: "Filter: 'all' | 'vst3' | 'au' | 'vst' | 'max'. Default: 'all'" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "load_plugin_by_name",
+    description: "Load a VST3 or AU plugin onto a track by name. Searches the browser and loads the best match. Use search_plugins first if unsure of the exact name.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        track_index: { type: SchemaType.NUMBER, description: "Zero-based track index" },
+        plugin_name: { type: SchemaType.STRING, description: "Plugin name e.g. 'Serum', 'Massive X', 'OTT', 'Valhalla Room'" },
+        plugin_type: { type: SchemaType.STRING, description: "Filter: 'all' | 'vst3' | 'au' | 'vst'. Default: 'all'" },
+      },
+      required: ["track_index", "plugin_name"],
+    },
+  },
+  {
+    name: "get_track_devices",
+    description: "Get all devices (instruments, effects, VSTs) on a track with their parameter names, values, and ranges. Use this before set_device_parameter_by_name to find the right parameter name.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        track_index: { type: SchemaType.NUMBER, description: "Zero-based track index" },
+      },
+      required: ["track_index"],
+    },
+  },
+  {
+    name: "set_device_parameter_by_name",
+    description: "Set a VST/AU/native device parameter by name. Partial name match is supported. Use get_track_devices first to see available parameters and their ranges.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        track_index: { type: SchemaType.NUMBER, description: "Zero-based track index" },
+        device_index: { type: SchemaType.NUMBER, description: "Zero-based device index on the track" },
+        param_name: { type: SchemaType.STRING, description: "Parameter name e.g. 'Filter Cutoff', 'Decay', 'Macro 1', 'OSC A Level'" },
+        value: { type: SchemaType.NUMBER, description: "New value. Will be clamped to parameter min/max." },
+      },
+      required: ["track_index", "device_index", "param_name", "value"],
+    },
+  },
 ];

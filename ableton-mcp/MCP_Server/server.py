@@ -2896,6 +2896,136 @@ def create_wonder_session(
         return f"Error creating Wonder session: {str(e)}"
 
 
+@mcp.tool()
+def search_plugins(
+    query: str = "",
+    plugin_type: str = "all"
+) -> str:
+    """
+    Search for VST3/AU/Max plugins in the Ableton browser by name.
+
+    Parameters:
+    - query: Search string (partial match, case-insensitive). Empty string returns all.
+    - plugin_type: Filter by type. Options: "all", "vst3", "au", "vst", "max"
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("search_plugins", {
+            "query": query,
+            "plugin_type": plugin_type
+        })
+        if "error" in result:
+            return f"Error: {result.get('error')}"
+        results = result.get("results", [])
+        lines = [f"Found {result.get('total', len(results))} plugins (showing {len(results)}):"]
+        for r in results:
+            lines.append(f"  {r['name']} — uri: {r['uri']}")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error searching plugins: {str(e)}")
+        return f"Error searching plugins: {str(e)}"
+
+
+@mcp.tool()
+def load_plugin_by_name(
+    track_index: int,
+    plugin_name: str,
+    plugin_type: str = "all"
+) -> str:
+    """
+    Load a VST3/AU plugin onto a track by searching for it by name.
+    Finds the best match in the Ableton browser and loads it.
+
+    Parameters:
+    - track_index: Zero-based track index
+    - plugin_name: Plugin name to search for (e.g. "Serum", "OTT", "Massive X")
+    - plugin_type: Filter by type: "all", "vst3", "au", "vst" (default "all")
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("load_plugin_by_name", {
+            "track_index": track_index,
+            "plugin_name": plugin_name,
+            "plugin_type": plugin_type
+        })
+        if "error" in result:
+            return f"Error: {result.get('error')}"
+        return f"Loaded plugin '{result.get('loaded')}' on track {track_index}"
+    except Exception as e:
+        logger.error(f"Error loading plugin: {str(e)}")
+        return f"Error loading plugin: {str(e)}"
+
+
+@mcp.tool()
+def set_device_parameter_by_name(
+    track_index: int,
+    device_index: int,
+    param_name: str,
+    value: float
+) -> str:
+    """
+    Set a device/plugin parameter by name (case-insensitive, partial match).
+    Use get_track_devices first to see available parameters.
+
+    Parameters:
+    - track_index: Zero-based track index
+    - device_index: Zero-based device index on the track
+    - param_name: Parameter name (e.g. "Filter Cutoff", "Decay", "Macro 1")
+    - value: New value (will be clamped to parameter min/max range)
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_device_parameter_by_name", {
+            "track_index": track_index,
+            "device_index": device_index,
+            "param_name": param_name,
+            "value": value
+        })
+        if "error" in result:
+            available = result.get("available", [])
+            msg = f"Error: {result.get('error')}"
+            if available:
+                msg += f"\nAvailable parameters: {', '.join(available[:20])}"
+            return msg
+        return f"Set '{result.get('param')}' to {result.get('value')} (range {result.get('min')}–{result.get('max')})"
+    except Exception as e:
+        logger.error(f"Error setting device parameter: {str(e)}")
+        return f"Error setting device parameter: {str(e)}"
+
+
+@mcp.tool()
+def get_track_devices(track_index: int) -> str:
+    """
+    Get all devices (plugins, instruments, effects) on a track with their parameters.
+    Use this to inspect what's loaded and find parameter names/ranges before editing.
+
+    Parameters:
+    - track_index: Zero-based track index
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_track_devices", {
+            "track_index": track_index
+        })
+        if "error" in result:
+            return f"Error: {result.get('error')}"
+        devices = result.get("devices", [])
+        if not devices:
+            return f"No devices on track {track_index}"
+        lines = [f"Track {track_index} — {len(devices)} device(s):"]
+        for d in devices:
+            lines.append(f"\n  [{d['index']}] {d['name']} ({d['class_name']})")
+            params = d.get("parameters", [])
+            for p in params[:30]:
+                lines.append(f"      param[{p['index']}] '{p['name']}' = {p['value']:.3f} (min={p['min']}, max={p['max']})")
+            if len(params) > 30:
+                lines.append(f"      ... and {len(params) - 30} more parameters")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error getting track devices: {str(e)}")
+        return f"Error getting track devices: {str(e)}"
+
+
 # Main execution
 def main():
     """Run the MCP server"""

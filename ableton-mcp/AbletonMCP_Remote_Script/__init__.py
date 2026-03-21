@@ -654,7 +654,8 @@ class AbletonMCP(ControlSurface):
                                  # Scrub
                                  "scrub_by",
                                  # Wonder commands
-                                 "load_sample_by_path", "create_wonder_session"]:
+                                 "load_sample_by_path", "create_wonder_session",
+                                 "load_plugin_by_name"]:
                 # Use a thread-safe approach with a response queue
                 # maxsize=10 prevents unbounded memory growth
                 response_queue = queue.Queue(maxsize=10)
@@ -1347,6 +1348,11 @@ class AbletonMCP(ControlSurface):
                             key_root = params.get("key_root", 0)
                             scale = params.get("scale", "minor")
                             result = self._create_wonder_session(bpm, tracks, swing, key_root, scale)
+                        elif command_type == "load_plugin_by_name":
+                            track_index = params.get("track_index", 0)
+                            plugin_name = params.get("plugin_name", "")
+                            plugin_type = params.get("plugin_type", "all")
+                            result = self._load_plugin_by_name(track_index, plugin_name, plugin_type)
 
                         # Put the result in the queue
                         response_queue.put({"status": "success", "result": result})
@@ -1416,6 +1422,20 @@ class AbletonMCP(ControlSurface):
                 return_index = params.get("return_index", 0)
                 item_uri = params.get("item_uri", "")
                 response["result"] = self._load_browser_item_to_return(return_index, item_uri)
+            # Plugin / device commands
+            elif command_type == "search_plugins":
+                query = params.get("query", "")
+                plugin_type = params.get("plugin_type", "all")
+                response["result"] = self._search_plugins(query, plugin_type)
+            elif command_type == "get_track_devices":
+                track_index = params.get("track_index", 0)
+                response["result"] = self._get_track_devices(track_index)
+            elif command_type == "set_device_parameter_by_name":
+                track_index = params.get("track_index", 0)
+                device_index = params.get("device_index", 0)
+                param_name = params.get("param_name", "")
+                value = params.get("value", 0)
+                response["result"] = self._set_device_parameter_by_name(track_index, device_index, param_name, value)
             else:
                 response["status"] = "error"
                 response["message"] = f"Unknown command: {command_type}. Available commands include: get_session_info, get_track_info, set_track_volume, set_track_pan, create_clip, add_notes_to_clip, fire_scene, load_browser_item, etc."
@@ -7333,5 +7353,169 @@ class AbletonMCP(ControlSurface):
             new_index = device_index + 1
             self._song.move_device(device, track, new_index)
             return {"success": True, "new_index": new_index}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ========================================================================
+    # VST3 / AU PLUGIN SUPPORT
+    # ========================================================================
+
+    def _search_plugins(self, query="", plugin_type="all"):
+        """Search for VST3/AU plugins by name in the Ableton browser"""
+        try:
+            results = []
+            app = self._song.application if hasattr(self._song, 'application') else None
+            browser = app.browser if app and hasattr(app, 'browser') else None
+            if browser is None:
+                return {"error": "Browser not available"}
+
+            def search_item(item, path=""):
+                full_path = (path + "/" + item.name) if path else item.name
+                is_plugin = False
+                name_lower = item.name.lower()
+                q_lower = query.lower()
+                if query == "" or q_lower in name_lower:
+                    source = str(getattr(item, 'source', "")).lower()
+                    if plugin_type == "all" or plugin_type in source or plugin_type in name_lower:
+                        if not item.is_folder:
+                            is_plugin = True
+                if is_plugin:
+                    results.append({
+                        "name": item.name,
+                        "uri": str(getattr(item, 'uri', "")),
+                        "path": full_path,
+                        "is_loadable": bool(getattr(item, 'is_loadable', False)),
+                    })
+                if item.is_folder and len(results) < 100:
+                    try:
+                        for child in item.children:
+                            search_item(child, full_path)
+                    except Exception:
+                        pass
+
+            # Search Plug-ins category
+            try:
+                for root_item in browser.plugins.children:
+                    search_item(root_item)
+            except Exception:
+                pass
+            # Also search Instruments
+            try:
+                for root_item in browser.instruments.children:
+                    search_item(root_item)
+            except Exception:
+                pass
+
+            return {"success": True, "results": results[:50], "total": len(results)}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _load_plugin_by_name(self, track_index, plugin_name, plugin_type="all"):
+        """Load a VST3/AU plugin onto a track by searching for it by name"""
+        try:
+            tracks = list(self._song.tracks)
+            if track_index < 0 or track_index >= len(tracks):
+                return {"error": "Track index out of range"}
+
+            search_result = self._search_plugins(query=plugin_name, plugin_type=plugin_type)
+            if "error" in search_result:
+                return search_result
+            results = search_result.get("results", [])
+            if not results:
+                return {"error": "Plugin not found: " + plugin_name}
+
+            # Pick best match: exact name first, then first result
+            match = None
+            for r in results:
+                if r["name"].lower() == plugin_name.lower():
+                    match = r
+                    break
+            if match is None:
+                match = results[0]
+
+            uri = match.get("uri", "")
+            if not uri:
+                return {"error": "Plugin has no URI, cannot load"}
+
+            app = self._song.application if hasattr(self._song, 'application') else None
+            browser = app.browser if app and hasattr(app, 'browser') else None
+            if browser is None:
+                return {"error": "Browser not available"}
+
+            item = browser.get_item_for_uri(uri) if hasattr(browser, 'get_item_for_uri') else None
+            if item is None:
+                return {"error": "Could not resolve URI: " + uri}
+
+            track = tracks[track_index]
+            self._song.select_midi_clip(track, 0) if hasattr(self._song, 'select_midi_clip') else None
+            view = self._song.application.view if hasattr(self._song.application, 'view') else None
+            if view:
+                view.selected_track = track
+            browser.load_item(item)
+            return {"success": True, "loaded": match["name"], "uri": uri, "track_index": track_index}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _set_device_parameter_by_name(self, track_index, device_index, param_name, value):
+        """Set a device parameter by name (case-insensitive partial match)"""
+        try:
+            tracks = list(self._song.tracks)
+            if track_index < 0 or track_index >= len(tracks):
+                return {"error": "Track index out of range"}
+            track = tracks[track_index]
+            devices = list(track.devices)
+            if device_index < 0 or device_index >= len(devices):
+                return {"error": "Device index out of range"}
+            device = devices[device_index]
+            params = list(device.parameters)
+            name_lower = param_name.lower()
+            match = None
+            for p in params:
+                if p.name.lower() == name_lower:
+                    match = p
+                    break
+            if match is None:
+                for p in params:
+                    if name_lower in p.name.lower():
+                        match = p
+                        break
+            if match is None:
+                available = [p.name for p in params]
+                return {"error": "Parameter not found: " + param_name, "available": available}
+            if not match.is_enabled:
+                return {"error": "Parameter is not enabled: " + match.name}
+            clamped = max(match.min, min(match.max, float(value)))
+            match.value = clamped
+            return {"success": True, "param": match.name, "value": clamped, "min": match.min, "max": match.max}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _get_track_devices(self, track_index):
+        """Get all devices on a track with their parameters"""
+        try:
+            tracks = list(self._song.tracks)
+            if track_index < 0 or track_index >= len(tracks):
+                return {"error": "Track index out of range"}
+            track = tracks[track_index]
+            devices_out = []
+            for di, device in enumerate(track.devices):
+                params_out = []
+                for pi, p in enumerate(device.parameters):
+                    params_out.append({
+                        "index": pi,
+                        "name": p.name,
+                        "value": p.value,
+                        "min": p.min,
+                        "max": p.max,
+                        "is_enabled": p.is_enabled,
+                    })
+                devices_out.append({
+                    "index": di,
+                    "name": device.name,
+                    "class_name": str(getattr(device, 'class_name', "")),
+                    "type": str(getattr(device, 'type', "")),
+                    "parameters": params_out,
+                })
+            return {"success": True, "track_index": track_index, "devices": devices_out}
         except Exception as e:
             return {"error": str(e)}
