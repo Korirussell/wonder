@@ -1,0 +1,6 @@
+lancedb
+librosa
+google-generativeai
+pandas
+numpy
+soundfile
