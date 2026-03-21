@@ -2,7 +2,7 @@ import * as net from "net";
 
 const ABLETON_HOST = process.env.ABLETON_HOST || "localhost";
 const ABLETON_PORT = parseInt(process.env.ABLETON_PORT || "9877");
-const TIMEOUT_MS = 12000;
+const TIMEOUT_MS = 5000;
 
 export async function sendAbletonCommand(
   commandType: string,

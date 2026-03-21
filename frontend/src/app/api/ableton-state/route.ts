@@ -9,46 +9,17 @@ export async function GET() {
   }
 
   try {
-    const [sessionInfo, trackInfos] = await Promise.all([
-      sendAbletonCommand("get_session_info", {}) as Promise<{
-        tempo: number;
-        track_count: number;
-        scene_count: number;
-        is_playing: boolean;
-      }>,
-      sendAbletonCommand("get_all_track_names", {}) as Promise<string[]>,
-    ]);
-
-    // Fetch per-track info for the first 12 tracks max (avoid overwhelming Ableton)
-    const trackCount = Math.min(sessionInfo.track_count ?? 0, 12);
-    const trackDetails = await Promise.all(
-      Array.from({ length: trackCount }, (_, i) =>
-        sendAbletonCommand("get_track_info", { track_index: i }).catch(() => null)
-      )
-    );
+    const sessionInfo = await sendAbletonCommand("get_session_info", {}) as Record<string, unknown>;
 
     return NextResponse.json({
       connected: true,
       bpm: sessionInfo.tempo ?? 120,
+      key: sessionInfo.key ?? null,
       isPlaying: sessionInfo.is_playing ?? false,
-      tracks: trackDetails
-        .map((t: unknown, i) => {
-          const track = t as Record<string, unknown> | null;
-          if (!track) return null;
-          return {
-            id: i,
-            name: Array.isArray(trackInfos) ? (trackInfos[i] ?? `Track ${i + 1}`) : `Track ${i + 1}`,
-            volume: (track.volume as number) ?? 0.85,
-            pan: (track.pan as number) ?? 0,
-            mute: (track.mute as boolean) ?? false,
-            solo: (track.solo as boolean) ?? false,
-            armed: (track.arm as boolean) ?? false,
-            devices: Array.isArray(track.devices)
-              ? (track.devices as Array<{ name: string }>).map((d) => d.name)
-              : [],
-          };
-        })
-        .filter(Boolean),
+      trackCount: sessionInfo.track_count ?? 0,
+      // Full per-track details are expensive — SessionMirror uses this for the HUD only.
+      // For the track list, Wonder updates it via chat tool call results instead.
+      tracks: [],
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

@@ -74,12 +74,13 @@ export default function SessionMirror() {
         const res = await fetch("/api/ableton-state");
         const data = await res.json();
         setAbletonConnected(data.connected ?? false);
-        if (data.connected && data.tracks?.length > 0) {
+        if (data.connected) {
           setSession((prev) => ({
             ...prev,
             bpm: data.bpm ?? prev.bpm,
             isPlaying: data.isPlaying ?? prev.isPlaying,
-            tracks: data.tracks,
+            // Only replace tracks if the API returned real ones
+            ...(data.tracks?.length > 0 ? { tracks: data.tracks } : {}),
           }));
         }
       } catch {
@@ -88,7 +89,7 @@ export default function SessionMirror() {
     };
 
     poll(); // immediate first call
-    const interval = setInterval(poll, 2000);
+    const interval = setInterval(poll, 5000);
     return () => clearInterval(interval);
   }, []);
 
