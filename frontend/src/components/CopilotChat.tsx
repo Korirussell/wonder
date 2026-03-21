@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Paperclip, Mic, Send, StopCircle } from "lucide-react";
+import { Paperclip, Mic, Send, StopCircle, Music2, X } from "lucide-react";
 import { ChatMessage } from "@/types";
 
 const INITIAL_MESSAGES: ChatMessage[] = [
@@ -14,6 +14,83 @@ const INITIAL_MESSAGES: ChatMessage[] = [
   },
 ];
 
+interface TapNote {
+  startMs: number;
+  durationMs: number;
+}
+
+interface PendingRhythm {
+  capture_ms: number;
+  reference_bpm: number;
+  timing_confidence: number;
+  quantization_hint: "light" | "medium" | "strong";
+  note_starts_beats: number[];
+  note_durations_beats: number[];
+  notes_ms: TapNote[];
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  return sorted[mid];
+}
+
+function analyzeTapNotes(notes: TapNote[]): PendingRhythm | null {
+  if (notes.length === 0) return null;
+
+  const sortedNotes = [...notes].sort((a, b) => a.startMs - b.startMs);
+  const captureMs = Math.max(
+    sortedNotes[sortedNotes.length - 1].startMs + sortedNotes[sortedNotes.length - 1].durationMs,
+    1
+  );
+
+  const onsets = sortedNotes.map((n) => n.startMs);
+  const intervals: number[] = [];
+  for (let i = 1; i < onsets.length; i++) {
+    intervals.push(onsets[i] - onsets[i - 1]);
+  }
+
+  const medianIoi = intervals.length > 0 ? median(intervals) : 500;
+  const referenceBpm = clamp(60000 / Math.max(medianIoi, 120), 50, 220);
+
+  const meanIoi = intervals.length > 0
+    ? intervals.reduce((sum, value) => sum + value, 0) / intervals.length
+    : medianIoi;
+  const stdIoi = intervals.length > 1
+    ? Math.sqrt(
+      intervals.reduce((sum, value) => sum + (value - meanIoi) ** 2, 0) / intervals.length
+    )
+    : 0;
+  const cv = meanIoi > 0 ? stdIoi / meanIoi : 1;
+  const timingConfidence = clamp(1 - cv * 1.5, 0, 1);
+
+  const quantizationHint: "light" | "medium" | "strong" =
+    timingConfidence > 0.8 ? "light" : timingConfidence > 0.6 ? "medium" : "strong";
+
+  const noteStartsBeats = sortedNotes.map((n) => (n.startMs / 60000) * referenceBpm);
+  const noteDurationsBeats = sortedNotes.map((n) =>
+    clamp((n.durationMs / 60000) * referenceBpm, 0.0625, 8)
+  );
+
+  return {
+    capture_ms: captureMs,
+    reference_bpm: Number(referenceBpm.toFixed(2)),
+    timing_confidence: Number(timingConfidence.toFixed(2)),
+    quantization_hint: quantizationHint,
+    note_starts_beats: noteStartsBeats,
+    note_durations_beats: noteDurationsBeats,
+    notes_ms: sortedNotes,
+  };
+}
+
 export default function CopilotChat() {
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
   const [input, setInput] = useState("");
@@ -23,6 +100,12 @@ export default function CopilotChat() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const [isTapRecording, setIsTapRecording] = useState(false);
+  const [tapNotes, setTapNotes] = useState<TapNote[]>([]);
+  const [tapStartedAt, setTapStartedAt] = useState<number | null>(null);
+  const [tapNow, setTapNow] = useState(0);
+  const activeTapStartRef = useRef<number | null>(null);
+  const [pendingRhythm, setPendingRhythm] = useState<PendingRhythm | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -50,6 +133,18 @@ export default function CopilotChat() {
     setInput("");
     setIsLoading(true);
 
+    const rhythmContext = pendingRhythm
+      ? {
+          capture_ms: pendingRhythm.capture_ms,
+          reference_bpm: pendingRhythm.reference_bpm,
+          timing_confidence: pendingRhythm.timing_confidence,
+          quantization_hint: pendingRhythm.quantization_hint,
+          note_starts_beats: pendingRhythm.note_starts_beats,
+          note_durations_beats: pendingRhythm.note_durations_beats,
+          output_mode: "new_track" as const,
+        }
+      : undefined;
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -59,6 +154,7 @@ export default function CopilotChat() {
             role: m.role,
             content: m.content,
           })),
+          rhythmContext,
         }),
       });
 
@@ -73,6 +169,7 @@ export default function CopilotChat() {
           timestamp: new Date(),
         },
       ]);
+      setPendingRhythm(null);
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -87,6 +184,99 @@ export default function CopilotChat() {
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!isTapRecording || tapStartedAt === null) return;
+
+    const timer = window.setInterval(() => {
+      setTapNow(performance.now() - tapStartedAt);
+    }, 33);
+
+    return () => window.clearInterval(timer);
+  }, [isTapRecording, tapStartedAt]);
+
+  useEffect(() => {
+    if (!isTapRecording || tapStartedAt === null) return;
+
+    const handleSpaceDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space") return;
+      event.preventDefault();
+      if (event.repeat || activeTapStartRef.current !== null) return;
+      activeTapStartRef.current = performance.now() - tapStartedAt;
+    };
+
+    const handleSpaceUp = (event: KeyboardEvent) => {
+      if (event.code !== "Space") return;
+      event.preventDefault();
+      if (activeTapStartRef.current === null) return;
+
+      const end = performance.now() - tapStartedAt;
+      const start = activeTapStartRef.current;
+      const duration = Math.max(40, end - start);
+      setTapNotes((prev) => [...prev, { startMs: start, durationMs: duration }]);
+      activeTapStartRef.current = null;
+    };
+
+    window.addEventListener("keydown", handleSpaceDown, { passive: false });
+    window.addEventListener("keyup", handleSpaceUp, { passive: false });
+
+    return () => {
+      window.removeEventListener("keydown", handleSpaceDown);
+      window.removeEventListener("keyup", handleSpaceUp);
+    };
+  }, [isTapRecording, tapStartedAt]);
+
+  const startTapRecording = () => {
+    if (isLoading) return;
+    activeTapStartRef.current = null;
+    setTapNotes([]);
+    setPendingRhythm(null);
+    setTapStartedAt(performance.now());
+    setTapNow(0);
+    setIsTapRecording(true);
+  };
+
+  const stopTapRecording = () => {
+    if (!isTapRecording || tapStartedAt === null) return;
+
+    let finalizedNotes = tapNotes;
+    if (activeTapStartRef.current !== null) {
+      const end = performance.now() - tapStartedAt;
+      const start = activeTapStartRef.current;
+      const duration = Math.max(40, end - start);
+      finalizedNotes = [...tapNotes, { startMs: start, durationMs: duration }];
+      activeTapStartRef.current = null;
+    }
+
+    setTapNotes(finalizedNotes);
+    setIsTapRecording(false);
+    setTapNow(0);
+
+    const analyzed = analyzeTapNotes(finalizedNotes);
+    if (analyzed) {
+      setPendingRhythm(analyzed);
+    }
+  };
+
+  const timelineNotes: TapNote[] = (() => {
+    if (isTapRecording && activeTapStartRef.current !== null) {
+      return [
+        ...tapNotes,
+        {
+          startMs: activeTapStartRef.current,
+          durationMs: Math.max(40, tapNow - activeTapStartRef.current),
+        },
+      ];
+    }
+    if (isTapRecording) return tapNotes;
+    return pendingRhythm?.notes_ms ?? [];
+  })();
+
+  const timelineDurationMs = Math.max(
+    isTapRecording ? tapNow : 0,
+    ...timelineNotes.map((n) => n.startMs + n.durationMs),
+    1
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -284,6 +474,20 @@ export default function CopilotChat() {
             )}
           </button>
 
+          {/* Tap rhythm button */}
+          <button
+            onClick={isTapRecording ? stopTapRecording : startTapRecording}
+            disabled={isRecording || isLoading}
+            className={`w-11 h-11 border-2 border-[#2D2D2D] rounded-xl flex items-center justify-center flex-shrink-0 self-end ${
+              isTapRecording
+                ? "bg-[#ffe082] recording-pulse"
+                : "bg-[#f4efe3] hard-shadow-sm interactive-push"
+            } disabled:opacity-40 disabled:cursor-not-allowed`}
+            title={isTapRecording ? "Stop rhythm capture" : "Capture rhythm with space bar"}
+          >
+            {isTapRecording ? <StopCircle size={18} strokeWidth={2.5} /> : <Music2 size={18} strokeWidth={2.5} />}
+          </button>
+
           {/* Send button */}
           <button
             onClick={sendMessage}
@@ -294,8 +498,52 @@ export default function CopilotChat() {
           </button>
         </div>
 
+        {(isTapRecording || pendingRhythm) && (
+          <div className="mt-3 border-2 border-[#2D2D2D] rounded-2xl bg-white p-3 hard-shadow-sm space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-mono text-[10px] font-bold uppercase tracking-widest opacity-50">
+                {isTapRecording ? "Tap capture armed (space bar global)" : "Captured rhythm"}
+              </span>
+              <span className="font-mono text-[10px] font-bold uppercase tracking-widest opacity-40">
+                {(pendingRhythm?.reference_bpm ?? 0).toFixed(2)} BPM ref · {timelineNotes.length} notes
+              </span>
+            </div>
+
+            <div className="h-20 border-2 border-[#2D2D2D]/20 rounded-xl bg-[#FDFDFB] relative overflow-hidden">
+              <div className="absolute inset-0 flex">
+                {Array.from({ length: 16 }).map((_, i) => (
+                  <div key={i} className="flex-1 border-r border-[#2D2D2D]/10 last:border-r-0" />
+                ))}
+              </div>
+              {timelineNotes.map((note, i) => {
+                const left = (note.startMs / timelineDurationMs) * 100;
+                const width = Math.max((note.durationMs / timelineDurationMs) * 100, 0.8);
+                return (
+                  <div
+                    key={`${note.startMs}-${note.durationMs}-${i}`}
+                    className="absolute top-1/2 -translate-y-1/2 h-6 bg-[#4a664c] border border-[#2D2D2D] rounded"
+                    style={{ left: `${left}%`, width: `${width}%` }}
+                  />
+                );
+              })}
+            </div>
+
+            {pendingRhythm && !isTapRecording && (
+              <div className="flex items-center w-full pr-1">
+                <button
+                  onClick={() => setPendingRhythm(null)}
+                  aria-label="Clear captured rhythm"
+                  className="ml-auto h-8 w-8 p-1 border-2 border-[#2D2D2D] rounded-lg bg-white/80 hover:bg-white transition-colors flex items-center justify-center"
+                >
+                  <X size={14} strokeWidth={2.5} />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <p className="text-[9px] font-mono font-bold uppercase text-center mt-3 opacity-25 tracking-widest">
-          Enter to send · Shift+Enter for new line · Gemini-powered
+          Enter to send · Shift+Enter new line · Tap button captures Space rhythm globally
         </p>
       </div>
     </section>
