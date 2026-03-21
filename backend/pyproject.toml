@@ -1,2 +1,2 @@
 [tool.uv.workspace]
-members = ["soundsplit", "soundgen", "server"]
+members = ["agent", "soundsplit", "soundgen", "server"]
