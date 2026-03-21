@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
     console.log(`[Transcribe] Received ${audio_data.length} chars of base64 ${input_format} audio`);
 
     // Call the Python REST API transcribe endpoint
-    const response = await fetch(`${PYTHON_API_URL}/api/transcribe`, {
+    const response = await fetch(`${PYTHON_API_URL}/transcribe`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

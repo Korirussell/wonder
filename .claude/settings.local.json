@@ -44,7 +44,8 @@
       "Bash(cp /tmp/watchingsummer_expected.mid \"/Users/nikechukwu/Desktop/watchingsummer_expected.mid\")",
       "Bash(uv sync:*)",
       "Bash(curl -s -X POST http://localhost:8001/split -F \"file=@/Users/nikechukwu/Desktop/hum.aifc\" -F \"input_type=auto\" -F \"midi=true\" -F \"beat_grid=true\" -F \"key=true\")",
-      "Bash(kill %1)"
+      "Bash(kill %1)",
+      "Bash(grep -E \"\\\\.py$\")"
     ]
   }
 }
