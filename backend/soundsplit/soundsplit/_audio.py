@@ -5,7 +5,11 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-_PYDUB_FORMATS = {".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma"}
+# Formats soundfile handles natively (libsndfile)
+_SOUNDFILE_FORMATS = {".wav", ".flac", ".aif", ".aiff", ".aifc", ".au", ".snd", ".caf"}
+# Formats that need a decoder; we try audioread first (uses Core Audio on macOS,
+# no ffmpeg required), then fall back to pydub+ffmpeg.
+_ENCODED_FORMATS = {".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma"}
 
 
 def load_audio(path: str | Path, mono: bool = False) -> tuple[np.ndarray, int]:
@@ -13,14 +17,27 @@ def load_audio(path: str | Path, mono: bool = False) -> tuple[np.ndarray, int]:
     Load an audio file. Returns (audio, sample_rate).
 
     audio shape: (samples,) if mono=True, else (channels, samples).
-    Supports WAV/FLAC/AIFF natively via soundfile; MP3/AAC/OGG via pydub+ffmpeg.
+
+    Format support:
+      - WAV, FLAC, AIFF, AIFC, CAF     — soundfile (no extra deps)
+      - M4A, AAC, MP3, OGG             — audioread (Core Audio on macOS, no ffmpeg)
+                                          falls back to pydub+ffmpeg if audioread fails
     """
     path = Path(path)
-    if path.suffix.lower() in _PYDUB_FORMATS:
-        audio, sr = _load_via_pydub(path)
-    else:
+    suffix = path.suffix.lower()
+
+    if suffix in _SOUNDFILE_FORMATS:
         data, sr = sf.read(str(path), always_2d=True)
         audio = data.T.astype(np.float32)  # (channels, samples)
+    elif suffix in _ENCODED_FORMATS:
+        audio, sr = _load_via_audioread(path)
+    else:
+        # Unknown format: let soundfile try first, then audioread
+        try:
+            data, sr = sf.read(str(path), always_2d=True)
+            audio = data.T.astype(np.float32)
+        except Exception:
+            audio, sr = _load_via_audioread(path)
 
     if mono:
         audio = to_mono(audio)
@@ -28,15 +45,38 @@ def load_audio(path: str | Path, mono: bool = False) -> tuple[np.ndarray, int]:
     return audio, sr
 
 
+def _load_via_audioread(path: Path) -> tuple[np.ndarray, int]:
+    """Decode compressed audio via audioread (Core Audio on macOS, no ffmpeg needed)."""
+    try:
+        import audioread
+    except ImportError as e:
+        raise ImportError("audioread is required for M4A/MP3/AAC files.") from e
+
+    try:
+        with audioread.audio_open(str(path)) as f:
+            sr = f.samplerate
+            n_channels = f.channels
+            raw = b"".join(f)
+
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        if n_channels > 1:
+            audio = samples.reshape(-1, n_channels).T  # (channels, samples)
+        else:
+            audio = samples[np.newaxis, :]
+        return audio, sr
+
+    except Exception as e:
+        # Last resort: pydub+ffmpeg
+        return _load_via_pydub(path)
+
+
 def _load_via_pydub(path: Path) -> tuple[np.ndarray, int]:
     try:
         from pydub import AudioSegment
-    except ImportError as e:
+    except ImportError as exc:
         raise ImportError(
-            "pydub is required to load MP3/AAC/OGG files. "
-            "Install it with: pip install pydub\n"
-            "Also ensure ffmpeg is installed: brew install ffmpeg"
-        ) from e
+            "Could not decode audio. Install ffmpeg: brew install ffmpeg"
+        ) from exc
 
     seg = AudioSegment.from_file(str(path))
     sr = seg.frame_rate
@@ -45,9 +85,9 @@ def _load_via_pydub(path: Path) -> tuple[np.ndarray, int]:
     samples /= 2 ** (n_bits - 1)
 
     if seg.channels > 1:
-        audio = samples.reshape(-1, seg.channels).T  # (channels, samples)
+        audio = samples.reshape(-1, seg.channels).T
     else:
-        audio = samples[np.newaxis, :]  # (1, samples)
+        audio = samples[np.newaxis, :]
 
     return audio, sr
 

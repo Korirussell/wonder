@@ -1,68 +1,101 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from ._audio import load_audio, to_mono
-from ._types import SplitResult
-from ._writer import write_beat_grid, write_metadata
+from ._preprocess import preprocess
+from ._types import BeatboxResult, HumResult, InputType, SplitResult
+from ._writer import write_beat_grid, write_f0_contour, write_metadata
 
 
 def split(
     audio_path: str | Path,
     output_dir: str | Path | None = None,
     *,
-    # Feature flags
+    # Input type — "auto" detects from the signal
+    input_type: InputType | Literal["auto"] = "auto",
+    # Feature flags (all default True for music; auto-adjusted for human sounds)
     stems: bool = True,
     midi: bool = True,
     per_stem_midi: bool = False,
     beat_grid: bool = True,
     key: bool = True,
+    # Human-sound outputs
+    hum_midi: bool = True,
+    beatbox_midi: bool = True,
+    # Preprocessing
+    preprocess_audio: bool = True,
+    denoise: bool = True,
+    normalize: bool = True,
+    trim_silence: bool = True,
+    denoise_strength: float = 0.75,
+    target_rms_db: float = -20.0,
     # Stem separation options
     stem_model: str = "htdemucs_6s",
     device: str = "cpu",
-    # MIDI transcription options
+    # Polyphonic MIDI options (basic-pitch)
     onset_threshold: float = 0.5,
     frame_threshold: float = 0.3,
-    # Per-stem MIDI: which stems to transcribe (None = melodic stems only)
     stems_to_transcribe: list[str] | None = None,
 ) -> SplitResult:
     """
     Split an audio file into DAW-ready components.
+
+    Handles both full music tracks and human-generated sounds (hums, whistles,
+    beatboxing). Pass ``input_type="auto"`` (default) to let soundsplit detect
+    the signal type, or set it explicitly to one of:
+    "music" | "hum" | "whistle" | "vocal_melody" | "beatbox".
+
+    For music:
+        - Stem separation (demucs htdemucs_6s)
+        - Polyphonic MIDI transcription (basic-pitch)
+        - Tempo, beat grid, key
+
+    For hum / whistle / vocal melody:
+        - Monophonic pitch tracking (pyin) → quantized MIDI
+        - Tempo, key
+
+    For beatbox:
+        - Onset detection + kick/snare/hihat classification → GM drum MIDI
+        - Tempo
 
     Parameters
     ----------
     audio_path:
         Path to the source audio file (WAV, FLAC, AIFF, MP3, AAC, OGG).
     output_dir:
-        Directory to write all output files into. Defaults to a folder named
-        after the source file in the current working directory.
+        Directory to write all output files. Defaults to ``./<stem>/``.
+    input_type:
+        Signal type. "auto" runs the classifier first.
     stems:
-        Separate audio into individual stems (vocals, drums, bass, guitar,
-        piano, other) using demucs htdemucs_6s.
+        Separate into stems (music only).
     midi:
-        Transcribe the full mix to a MIDI file using basic-pitch.
+        Polyphonic MIDI transcription (music / vocal_melody only).
     per_stem_midi:
-        Also transcribe each melodic stem to its own MIDI file. Requires
-        stems=True. Significantly slower.
+        Also transcribe each melodic stem to MIDI (requires stems=True).
     beat_grid:
-        Detect tempo (BPM), time signature, and beat/downbeat timestamps.
+        Detect BPM, time signature, and beat timestamps (all types).
     key:
-        Detect the musical key of the track.
+        Detect musical key (all types except beatbox).
+    hum_midi:
+        Write monophonic MIDI for hum/whistle/vocal_melody inputs.
+    beatbox_midi:
+        Write GM drum MIDI for beatbox inputs.
     stem_model:
-        Demucs model to use for stem separation. Default: "htdemucs_6s".
+        Demucs model name (default: "htdemucs_6s").
     device:
-        Compute device for demucs. "cpu" or "cuda".
+        Compute device for demucs: "cpu" or "cuda".
     onset_threshold:
-        basic-pitch onset sensitivity (0–1). Lower = more notes detected.
+        basic-pitch onset sensitivity 0–1.
     frame_threshold:
-        basic-pitch frame sensitivity (0–1). Lower = longer notes.
+        basic-pitch frame sensitivity 0–1.
     stems_to_transcribe:
-        Subset of stems to run MIDI transcription on when per_stem_midi=True.
-        Defaults to ["vocals", "guitar", "piano", "bass"].
+        Stems to MIDI-transcribe when per_stem_midi=True.
 
     Returns
     -------
-    SplitResult with all extracted data and paths to output files.
+    SplitResult
     """
     audio_path = Path(audio_path)
     if output_dir is None:
@@ -74,10 +107,50 @@ def split(
 
     print(f"[soundsplit] Loading {audio_path.name} ...")
     audio_stereo, sr = load_audio(audio_path, mono=False)
-    audio_mono = to_mono(audio_stereo)
-    result.duration_s = audio_mono.shape[0] / sr
+    audio_mono_raw = to_mono(audio_stereo)
+    result.duration_s = audio_mono_raw.shape[0] / sr
 
-    # --- Tempo / rhythm ---
+    # --- Preprocessing: denoise, normalize, trim ---
+    # Runs on the mono signal used by all analysis extractors.
+    # Stem separation keeps the original stereo so demucs preserves panning.
+    if preprocess_audio:
+        pre = preprocess(
+            audio_mono_raw,
+            sr,
+            trim_silence=trim_silence,
+            denoise=denoise,
+            normalize=normalize,
+            denoise_strength=denoise_strength,
+            target_rms_db=target_rms_db,
+        )
+        audio_mono = pre.audio
+        flags = []
+        if pre.was_trimmed:
+            flags.append("trimmed")
+        if pre.was_denoised:
+            flags.append("denoised")
+        if pre.was_amplified:
+            gain = pre.processed_rms_db - pre.original_rms_db
+            flags.append(f"amplified {gain:+.1f}dB")
+        if flags:
+            print(f"[soundsplit] Preprocessed: {', '.join(flags)}"
+                  f"  (RMS {pre.original_rms_db:.1f}→{pre.processed_rms_db:.1f} dBFS)")
+    else:
+        audio_mono = audio_mono_raw
+
+    # --- Detect / set input type ---
+    if input_type == "auto":
+        print("[soundsplit] Detecting input type ...")
+        from .extractors.detect_input import detect_input_type
+        result.input_type = detect_input_type(audio_mono, sr)
+        print(f"[soundsplit]   Detected: {result.input_type}")
+    else:
+        result.input_type = input_type
+        print(f"[soundsplit] Input type: {result.input_type}")
+
+    is_human = result.input_type in ("hum", "whistle", "beatbox", "vocal_melody")
+
+    # --- Tempo / beat grid (all types) ---
     if beat_grid:
         print("[soundsplit] Detecting tempo and beat grid ...")
         from .extractors.tempo import detect_tempo, detect_time_signature
@@ -90,16 +163,16 @@ def split(
         )
         print(f"[soundsplit]   BPM={result.bpm:.1f}  time_sig={result.time_signature}")
 
-    # --- Key ---
-    if key:
+    # --- Key (not useful for pure beatbox) ---
+    if key and result.input_type != "beatbox":
         print("[soundsplit] Detecting key ...")
         from .extractors.key import detect_key
 
         result.key = detect_key(audio_mono, sr)
         print(f"[soundsplit]   Key={result.key}")
 
-    # --- Stem separation ---
-    if stems:
+    # --- Music: stem separation ---
+    if stems and not is_human:
         print(f"[soundsplit] Separating stems with {stem_model} (device={device}) ...")
         print("[soundsplit]   This may take a while on CPU.")
         from .extractors.stems import separate_stems
@@ -107,11 +180,10 @@ def split(
         result.stems = separate_stems(
             audio_stereo, sr, output_dir, model=stem_model, device=device
         )
-        written = list(result.stems.as_dict().keys())
-        print(f"[soundsplit]   Stems written: {written}")
+        print(f"[soundsplit]   Stems: {list(result.stems.as_dict().keys())}")
 
-    # --- Full-mix MIDI transcription ---
-    if midi:
+    # --- Music / vocal_melody: polyphonic MIDI ---
+    if midi and result.input_type not in ("hum", "whistle", "beatbox"):
         print("[soundsplit] Transcribing full mix to MIDI ...")
         from .extractors.midi import transcribe_midi
 
@@ -123,9 +195,9 @@ def split(
             onset_threshold=onset_threshold,
             frame_threshold=frame_threshold,
         )
-        print(f"[soundsplit]   MIDI written: {result.midi_path}")
+        print(f"[soundsplit]   MIDI: {result.midi_path}")
 
-    # --- Per-stem MIDI transcription ---
+    # --- Music: per-stem MIDI ---
     if per_stem_midi and result.stems is not None:
         print("[soundsplit] Transcribing stems to MIDI ...")
         from .extractors.midi import transcribe_stems_midi
@@ -137,12 +209,52 @@ def split(
             onset_threshold=onset_threshold,
             frame_threshold=frame_threshold,
         )
-        print(f"[soundsplit]   Stem MIDI written: {list(result.stem_midi.keys())}")
+        print(f"[soundsplit]   Stem MIDI: {list(result.stem_midi.keys())}")
+
+    # --- Hum / whistle / vocal_melody: monophonic pitch → MIDI ---
+    if hum_midi and result.input_type in ("hum", "whistle", "vocal_melody"):
+        print("[soundsplit] Tracking pitch and transcribing melody MIDI ...")
+        from .extractors.monophonic import transcribe_hum
+
+        midi_path, f0_times, f0_hz, f0_conf = transcribe_hum(
+            audio_mono,
+            sr,
+            output_dir / "midi" / "melody.mid",
+            bpm=result.bpm or 120.0,
+        )
+        result.hum = HumResult(
+            midi_path=midi_path,
+            f0_times=f0_times,
+            f0_hz=f0_hz,
+            f0_confidence=f0_conf,
+        )
+        print(f"[soundsplit]   Melody MIDI: {midi_path}")
+
+    # --- Beatbox: onset detection + drum MIDI ---
+    if beatbox_midi and result.input_type == "beatbox":
+        print("[soundsplit] Detecting onsets and transcribing drum MIDI ...")
+        from .extractors.beatbox import transcribe_beatbox
+
+        midi_path, onset_times, onset_labels = transcribe_beatbox(
+            audio_mono,
+            sr,
+            output_dir / "midi" / "drums.mid",
+            bpm=result.bpm or 120.0,
+        )
+        result.beatbox = BeatboxResult(
+            midi_path=midi_path,
+            onset_times=onset_times,
+            onset_labels=onset_labels,
+        )
+        label_counts = {k: onset_labels.count(k) for k in ("kick", "snare", "hihat")}
+        print(f"[soundsplit]   Drum MIDI: {midi_path}  counts={label_counts}")
 
     # --- Write summary files ---
     write_metadata(result)
     if beat_grid:
         write_beat_grid(result)
+    if result.hum:
+        write_f0_contour(result)
 
     print(f"[soundsplit] Done. Output in: {output_dir}")
     return result
