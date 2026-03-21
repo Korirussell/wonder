@@ -22,6 +22,33 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  isGreeting?: boolean; // If true, don't send to Gemini (just display)
+}
+
+export interface TranscribedNote {
+  pitch: number;      // MIDI pitch 0-127
+  start_time: number; // Start time in beats
+  duration: number;   // Duration in beats
+  velocity: number;   // MIDI velocity 0-127
+  mute?: boolean;
+}
+
+// Compact summary of transcribed notes (sent to Gemini instead of full array)
+export interface NotesSummary {
+  note_count: number;
+  pitch_range?: [string, string]; // e.g., ["C3", "G4"]
+  duration_beats?: number;
+  first_notes?: string[]; // e.g., ["C4", "E4", "G4"]
+}
+
+// MIDI context passed to Gemini (lightweight reference instead of full notes)
+export interface MidiContext {
+  midi_id: string;
+  midi_path: string;
+  note_count: number;
+  notes_summary: NotesSummary;
+  suggested_clip_length: number;
+  tempo_bpm: number;
 }
 
 export interface WonderProfile {
