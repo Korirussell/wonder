@@ -27,7 +27,7 @@ Expected output includes:
 
 1. Activate your virtual environment.
 2. Install dependencies.
-3. Set required environment variables.
+3. Create a project-local `.env` file from `.env.example`.
 4. Run `tagging.py`.
 
 ```bash
@@ -35,8 +35,13 @@ cd wonder
 source .venv/bin/activate
 python -m pip install -r tagging/tagging_requirements.txt
 
-export GEMINI_API_KEY="YOUR_KEY"
-export SAMPLE_DIR="/absolute/path/to/sample/library"
+# Create your local env file (contains GEMINI_API_KEY + SAMPLE_DIR)
+cp .env.example .env
+# Then edit .env with your real values
+
+# Optional: export values directly instead of using .env
+# export GEMINI_API_KEY="YOUR_KEY"
+# export SAMPLE_DIR="/absolute/path/to/sample/library"
 # Optional:
 # export TAG_DB_BACKEND="lancedb"
 # export TAG_DB_PATH="./data/sample_library.lance"

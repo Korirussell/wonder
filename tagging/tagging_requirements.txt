@@ -1,6 +1,7 @@
 lancedb
 librosa
 google-generativeai
+python-dotenv
 pandas
 numpy
 soundfile
