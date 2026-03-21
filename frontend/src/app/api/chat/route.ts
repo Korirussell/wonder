@@ -32,6 +32,16 @@ interface MidiContext {
   tempo_bpm: number;
 }
 
+interface RhythmContext {
+  capture_ms: number;
+  reference_bpm: number;
+  timing_confidence: number;
+  quantization_hint: "light" | "medium" | "strong";
+  note_starts_beats: number[];
+  note_durations_beats: number[];
+  output_mode: "new_track";
+}
+
 // Call Python REST API for non-Ableton tools (like load_midi_notes)
 async function callPythonApi(endpoint: string, args: Record<string, unknown>): Promise<unknown> {
   const res = await fetch(`${PYTHON_API_URL}${endpoint}`, {
@@ -68,6 +78,27 @@ TO ADD THIS MELODY TO ABLETON:
 1. First call load_midi_notes with midi_id="${ctx.midi_id}" to get the notes array
 2. Create a MIDI track and clip
 3. Use add_notes_to_clip with the notes array from step 1`;
+}
+
+function buildRhythmContext(ctx: RhythmContext): string {
+  const noteCount = Math.min(ctx.note_starts_beats.length, ctx.note_durations_beats.length);
+  const starts = ctx.note_starts_beats.slice(0, 64).map((value) => Number(value.toFixed(4)));
+  const durations = ctx.note_durations_beats.slice(0, 64).map((value) => Number(value.toFixed(4)));
+
+  return `
+
+USER RHYTHM CAPTURE (space-bar hold lengths):
+- Captured notes: ${noteCount}
+- Reference BPM (for placement only): ${ctx.reference_bpm}
+- Timing confidence: ${ctx.timing_confidence}
+- Quantization hint: ${ctx.quantization_hint}
+- Beat starts: [${starts.join(", ")}]
+- Beat durations: [${durations.join(", ")}]
+
+IMPORTANT:
+- Treat this rhythm as the timing skeleton for your MIDI notes.
+- Keep session tempo unchanged unless the user explicitly asks to set tempo.
+- Always create a new MIDI track and place the generated clip there.`;
 }
 
 const WONDER_SYSTEM_PROMPT = `You are an elite AI music producer operating directly inside Ableton Live via a connected MCP server. You don't describe music — you build it: real tracks, real MIDI, real audio, real signal chains, in the DAW.
@@ -324,11 +355,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { messages, audioData, mimeType, midiContext } = await req.json() as {
+    const { messages, audioData, mimeType, midiContext, rhythmContext } = await req.json() as {
       messages: Array<{ role: "user" | "assistant"; content: string }>;
       audioData?: string;
       mimeType?: string;
       midiContext?: MidiContext;
+      rhythmContext?: RhythmContext;
     };
 
     const genAI = new GoogleGenerativeAI(apiKey);
@@ -339,6 +371,9 @@ export async function POST(req: NextRequest) {
     // Add MIDI context if provided
     if (midiContext && midiContext.note_count > 0) {
       enhancedPrompt += buildMidiContext(midiContext);
+    }
+    if (rhythmContext && rhythmContext.note_starts_beats.length > 0 && rhythmContext.note_durations_beats.length > 0) {
+      enhancedPrompt += buildRhythmContext(rhythmContext);
     }
     
     const model = genAI.getGenerativeModel({
