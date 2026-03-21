@@ -32,3 +32,21 @@ def write_beat_grid(result: SplitResult) -> Path | None:
             indent=2,
         )
     return path
+
+
+def write_f0_contour(result: SplitResult) -> Path | None:
+    """Write f0_contour.json for hum/whistle results. Returns the path."""
+    if result.hum is None or not result.hum.f0_times:
+        return None
+    path = result.output_dir / "f0_contour.json"
+    with open(path, "w") as f:
+        json.dump(
+            {
+                "times": result.hum.f0_times,
+                "f0_hz": result.hum.f0_hz,
+                "f0_confidence": result.hum.f0_confidence,
+            },
+            f,
+            indent=2,
+        )
+    return path
