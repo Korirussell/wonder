@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh api:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(gh search:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(pip install:*)",
+      "Read(//Users/kori/Music/Ableton/**)",
+      "Read(//Users/kori/Music/**)",
+      "Skill(update-config)",
+      "Bash(/usr/local/bin/python --version)",
+      "Bash(python3 -c \"import mcp; print\\(mcp.__version__\\)\")",
+      "Bash(pip3 show:*)",
+      "Bash(python3:*)"
+    ]
+  }
+}
