@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+/* Graph-paper dot grid background */
+body {
+  background-color: #fdfdfb;
+  background-image: radial-gradient(#2d2d2d 0.5px, transparent 0.5px);
+  background-size: 24px 24px;
+  font-family: "Be Vietnam Pro", sans-serif;
+  color: #2d2d2d;
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* Hard shadows */
+.hard-shadow {
+  box-shadow: 4px 4px 0px 0px rgba(45, 45, 45, 1);
+}
+.hard-shadow-sm {
+  box-shadow: 2px 2px 0px 0px rgba(45, 45, 45, 1);
+}
+
+/* Physical press interaction */
+.interactive-push {
+  transition: transform 100ms, box-shadow 100ms;
+}
+.interactive-push:hover {
+  transform: translate(1px, 1px);
+  box-shadow: 2px 2px 0px 0px rgba(45, 45, 45, 1);
+}
+.interactive-push:active {
+  transform: translate(4px, 4px);
+  box-shadow: 0px 0px 0px 0px rgba(45, 45, 45, 1);
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #2d2d2d;
+  border-radius: 10px;
+}
+
+/* Fader thumb gradient */
+.fader-thumb {
+  background: linear-gradient(180deg, #fdfdfb 0%, #e0e0e0 100%);
+}
+
+/* Plugin pill gradient */
+.plugin-pill {
+  background: linear-gradient(135deg, #ffffff 0%, #f0f0f0 100%);
+}
+
+/* Recording pulse ring */
+@keyframes record-pulse {
+  0%, 100% { box-shadow: 4px 4px 0px 0px rgba(45,45,45,1), 0 0 0 0 rgba(250,113,80,0.6); }
+  50%       { box-shadow: 4px 4px 0px 0px rgba(45,45,45,1), 0 0 0 8px rgba(250,113,80,0); }
+}
+.recording-pulse {
+  animation: record-pulse 1.2s ease-in-out infinite;
+}
