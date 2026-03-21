@@ -12,7 +12,17 @@
       "Bash(/usr/local/bin/python --version)",
       "Bash(python3 -c \"import mcp; print\\(mcp.__version__\\)\")",
       "Bash(pip3 show:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(pip3 install:*)",
+      "Bash(uv venv:*)",
+      "Bash(uv pip:*)",
+      "Bash(.venv/bin/python -c \"from soundsplit import split, SplitResult, StemPaths; from soundsplit.extractors import detect_key, detect_tempo, separate_stems, transcribe_midi; print\\('All imports OK'\\)\")",
+      "Bash(.venv/bin/python -c \"\nimport demucs.api; print\\('demucs OK'\\)\nfrom basic_pitch.inference import predict; print\\('basic-pitch OK'\\)\nimport pretty_midi; print\\('pretty_midi OK'\\)\n\")",
+      "Bash(.venv/bin/python -c \"import demucs; print\\(dir\\(demucs\\)\\)\")",
+      "Bash(.venv/bin/python -c \"import demucs; print\\(demucs.__version__\\)\")",
+      "Bash(xargs ls:*)",
+      "Bash(.venv/bin/python -c \"\nfrom soundsplit import split\n\nresult = split\\(\n    '/tmp/test_song.wav',\n    output_dir='/tmp/test_out',\n    stems=False,        # skip demucs for now \\(slow + model download\\)\n    midi=False,         # skip basic-pitch for now\n    per_stem_midi=False,\n    beat_grid=True,\n    key=True,\n\\)\n\nprint\\(\\)\nprint\\(f'BPM:          {result.bpm}'\\)\nprint\\(f'Time sig:     {result.time_signature}'\\)\nprint\\(f'Key:          {result.key}'\\)\nprint\\(f'Duration:     {result.duration_s:.1f}s'\\)\nprint\\(f'Beat count:   {len\\(result.beat_times\\)}'\\)\nprint\\(f'Downbeats:    {len\\(result.downbeat_times\\)}'\\)\n\nimport json\nmeta = json.loads\\(\\(result.output_dir / \\\\\"metadata.json\\\\\"\\).read_text\\(\\)\\)\nprint\\(f'metadata.json written: {list\\(meta.keys\\(\\)\\)}'\\)\nbeat_json = result.output_dir / 'beat_grid.json'\nprint\\(f'beat_grid.json written: {beat_json.exists\\(\\)}'\\)\n\")",
+      "Bash(.venv/bin/soundsplit /tmp/test_song.wav -o /tmp/test_cli_out --no-stems --no-midi 2>&1)"
     ]
   }
 }
