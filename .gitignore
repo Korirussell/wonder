@@ -2,6 +2,9 @@
 venv/
 __pycache__/
 
+# Local LanceDB / tagging index
+data/
+
 .env
 .env.*
 !.env.example
