@@ -2,6 +2,14 @@ import { GoogleGenerativeAI, FunctionCallingMode, type Content } from "@google/g
 import { NextRequest, NextResponse } from "next/server";
 import { sendAbletonCommand } from "@/lib/ableton";
 import { WONDER_TOOL_DECLARATIONS } from "@/lib/wonderTools";
+import { buildSystemPromptWithKnowledge } from "@/lib/wonderKnowledge";
+import {
+  createInitialState,
+  updateStateAfterToolCall,
+  serializeState,
+  type SessionState,
+} from "@/lib/sessionState";
+import { validateBeforeExecution } from "@/lib/musicValidator";
 
 const WONDER_SYSTEM_PROMPT = `You are Wonder — an AI music production copilot embedded in Ableton Live.
 You are "Cursor for music production."
@@ -79,17 +87,26 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { messages } = await req.json() as {
+    const { messages, audioData, mimeType } = await req.json() as {
       messages: Array<{ role: "user" | "assistant"; content: string }>;
+      audioData?: string;
+      mimeType?: string;
     };
 
     const genAI = new GoogleGenerativeAI(apiKey);
+    
+    // Build enhanced system prompt with wonder.md knowledge
+    const enhancedPrompt = buildSystemPromptWithKnowledge(WONDER_SYSTEM_PROMPT);
+    
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
-      systemInstruction: WONDER_SYSTEM_PROMPT,
+      systemInstruction: enhancedPrompt,
       tools: [{ functionDeclarations: WONDER_TOOL_DECLARATIONS }],
       toolConfig: { functionCallingConfig: { mode: FunctionCallingMode.AUTO } },
     });
+    
+    // Initialize session state tracker
+    let sessionState: SessionState = createInitialState();
 
     // Gemini requires history to start with role "user" — strip any leading
     // assistant messages (e.g. the initial greeting injected by the frontend).
@@ -101,15 +118,72 @@ export async function POST(req: NextRequest) {
     const history: Content[] = firstUserIdx >= 0 ? rawHistory.slice(firstUserIdx) : [];
 
     const lastMessage = messages[messages.length - 1];
-    const chat = model.startChat({ history });
+    
+    // Only inject session state if there's existing history
+    let historyWithState: Content[] = history;
+    
+    if (history.length > 0) {
+      historyWithState = [
+        ...history,
+        {
+          role: "user",
+          parts: [{
+            text: `Current session state:\n\`\`\`json\n${serializeState(sessionState)}\n\`\`\`\n\nRemember to update this state after every tool call.`
+          }]
+        },
+        {
+          role: "model",
+          parts: [{ text: "Understood. I will maintain and update the session state throughout our conversation." }]
+        }
+      ];
+    }
+    
+    const chat = model.startChat({ history: historyWithState });
 
     // ── Agentic loop ──────────────────────────────────────────────────────────
-    let response = await chat.sendMessage(lastMessage.content);
+    let response;
+    
+    console.log(`[Wonder] Sending message: "${lastMessage.content.slice(0, 100)}..."`);
+    
+    if (audioData && mimeType) {
+      // Send audio directly to Gemini for understanding
+      const audioPart = {
+        inlineData: {
+          data: audioData,
+          mimeType: mimeType,
+        },
+      };
+      response = await chat.sendMessage([
+        audioPart,
+        { text: "Listen to this audio and understand what the user wants. If they're humming a melody, transcribe it to MIDI notes. If they're speaking, follow their instructions to create music in Ableton." },
+      ]);
+    } else {
+      response = await chat.sendMessage(lastMessage.content);
+    }
+    
+    console.log(`[Wonder] Response candidates:`, response.response.candidates?.length || 0);
+    
     let toolRounds = 0;
 
     while (toolRounds < MAX_TOOL_ROUNDS) {
       const candidate = response.response.candidates?.[0];
       if (!candidate) break;
+      
+      // Check if candidate has content and parts
+      if (!candidate.content || !candidate.content.parts) {
+        console.error("[Wonder] No content.parts in candidate");
+        console.error("[Wonder] Candidate:", JSON.stringify(candidate, null, 2));
+        try {
+          const finalText = response.response.text();
+          console.log("[Wonder] Returning text response:", finalText.slice(0, 200));
+          return NextResponse.json({ content: finalText });
+        } catch (textErr) {
+          console.error("[Wonder] Failed to get text from response:", textErr);
+          return NextResponse.json({ 
+            content: "I encountered an error processing your request. Please try again with a simpler prompt like 'make a lofi beat'." 
+          }, { status: 500 });
+        }
+      }
 
       const functionCalls = candidate.content.parts.filter((p) => p.functionCall);
       if (functionCalls.length === 0) break;
@@ -128,19 +202,49 @@ export async function POST(req: NextRequest) {
 
           console.log(`[Wonder] → ${call.name}`, JSON.stringify(args).slice(0, 200));
 
-          try {
-            const result = await sendAbletonCommand(call.name, args);
-            console.log(`[Wonder] ✓ ${call.name}:`, JSON.stringify(result).slice(0, 100));
+          // Validate before execution
+          const validation = validateBeforeExecution(call.name, args, sessionState);
+          
+          if (!validation.valid) {
+            console.error(`[Wonder] ✗ Validation failed for ${call.name}:`, validation.errors);
             return {
               functionResponse: {
                 name: call.name,
-                response: { result },
+                response: {
+                  error: `Validation failed: ${validation.errors.join(", ")}`,
+                  warnings: validation.warnings,
+                  hint: "Fix the validation errors before retrying. Check session state and music theory rules.",
+                },
+              },
+            };
+          }
+          
+          // Log warnings but continue
+          if (validation.warnings.length > 0) {
+            console.warn(`[Wonder] ⚠ Warnings for ${call.name}:`, validation.warnings);
+          }
+
+          try {
+            const result = await sendAbletonCommand(call.name, args);
+            console.log(`[Wonder] ✓ ${call.name}:`, JSON.stringify(result).slice(0, 100));
+            
+            // Update session state after successful execution
+            sessionState = updateStateAfterToolCall(sessionState, call.name, args, result);
+            console.log(`[Wonder] 📊 Session state updated:`, serializeState(sessionState).slice(0, 200));
+            
+            return {
+              functionResponse: {
+                name: call.name,
+                response: {
+                  result,
+                  session_state: sessionState,
+                  warnings: validation.warnings.length > 0 ? validation.warnings : undefined,
+                },
               },
             };
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             console.error(`[Wonder] ✗ ${call.name}: ${msg}`);
-            // Return the full error so Gemini can read it and adapt
             return {
               functionResponse: {
                 name: call.name,
