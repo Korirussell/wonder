@@ -142,8 +142,8 @@ export default function CopilotChat() {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                prompt: args.description as string,
-                duration: (args.durationSeconds as number) ?? 2,
+                description: args.description as string,
+                duration_seconds: (args.durationSeconds as number) ?? 2,
               }),
             });
             if (!resp.ok) { result = "Failed to generate audio — check ElevenLabs API key"; break; }
