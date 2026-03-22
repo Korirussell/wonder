@@ -1,10 +1,12 @@
 from fastapi import FastAPI
 import uvicorn
 
+from api.generation import router as generation_router
 from api.samples import router as samples_router
 
 
 app = FastAPI(title="backend_but_better")
+app.include_router(generation_router)
 app.include_router(samples_router)
 
 
