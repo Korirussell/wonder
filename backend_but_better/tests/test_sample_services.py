@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from services.sample_database import SampleDatabaseService
 from services.sample_embedding import EmbeddingConfig, SampleEmbeddingService
@@ -16,6 +17,14 @@ def make_database(tmp_path: Path) -> SampleDatabaseService:
         table_name="samples",
         vector_dim=4,
     )
+
+
+class FakeEmbeddingService:
+    def __init__(self, embedding: list[float]) -> None:
+        self.embedding = embedding
+
+    def embed_query(self, query: str) -> list[float]:
+        return self.embedding
 
 
 def seed_records(tmp_path: Path, database: SampleDatabaseService) -> list[SampleRecord]:
@@ -83,13 +92,16 @@ def test_filtered_samples_require_all_tags(tmp_path: Path) -> None:
 def test_search_ranks_most_relevant_sample_first(tmp_path: Path) -> None:
     database = make_database(tmp_path)
     seed_records(tmp_path, database)
-    search_service = SampleSearchService(database)
+    search_service = SampleSearchService(
+        database,
+        embedding_service=FakeEmbeddingService([1.0, 0.5, 0.0, 0.0]),
+    )
 
     results = search_service.search(
         SampleSearchRequest(query="punchy 808 kick", limit=5)
     )
 
-    assert [result.file_name for result in results] == ["kick.wav"]
+    assert [result.file_name for result in results] == ["kick.wav", "hat.wav"]
     assert results[0].similarity_score > 0
 
 
@@ -109,3 +121,57 @@ def test_embedding_service_builds_and_normalizes_search_inputs() -> None:
     )
     assert service.prepare_query_text("  warm   synth lead  ") == "warm synth lead"
     assert service.normalize_embedding([1.0, 2.0]) == [1.0, 2.0, 0.0, 0.0]
+
+
+def test_embedding_service_embeds_query_with_gemini_client() -> None:
+    service = SampleEmbeddingService(
+        EmbeddingConfig(
+            vector_dim=4,
+            api_key="test-key",
+            model_name="models/gemini-embedding-001",
+        )
+    )
+
+    with (
+        patch("google.generativeai.configure") as configure_mock,
+        patch(
+            "google.generativeai.embed_content",
+            return_value={"embedding": [0.1, 0.2]},
+        ) as embed_mock,
+    ):
+        result = service.embed_query(" warm synth lead ")
+
+    configure_mock.assert_called_once_with(api_key="test-key")
+    embed_mock.assert_called_once_with(
+        model="models/gemini-embedding-001",
+        content="warm synth lead",
+        task_type="retrieval_query",
+    )
+    assert result == [0.1, 0.2, 0.0, 0.0]
+
+
+def test_embedding_service_embeds_document_with_gemini_client() -> None:
+    service = SampleEmbeddingService(
+        EmbeddingConfig(
+            vector_dim=4,
+            api_key="test-key",
+            model_name="models/gemini-embedding-001",
+        )
+    )
+
+    with (
+        patch("google.generativeai.configure") as configure_mock,
+        patch(
+            "google.generativeai.embed_content",
+            return_value={"embedding": [0.4, 0.5, 0.6]},
+        ) as embed_mock,
+    ):
+        result = service.embed_document(" warm analog synth ")
+
+    configure_mock.assert_called_once_with(api_key="test-key")
+    embed_mock.assert_called_once_with(
+        model="models/gemini-embedding-001",
+        content="warm analog synth",
+        task_type="retrieval_document",
+    )
+    assert result == [0.4, 0.5, 0.6, 0.0]

@@ -19,6 +19,14 @@ def make_database(tmp_path: Path) -> SampleDatabaseService:
     )
 
 
+class FakeEmbeddingService:
+    def __init__(self, embedding: list[float]) -> None:
+        self.embedding = embedding
+
+    def embed_query(self, query: str) -> list[float]:
+        return self.embedding
+
+
 def seed_record(tmp_path: Path, database: SampleDatabaseService) -> SampleRecord:
     audio_path = tmp_path / "generated.wav"
     write_silent_wav(audio_path)
@@ -40,6 +48,7 @@ def seed_record(tmp_path: Path, database: SampleDatabaseService) -> SampleRecord
 def test_search_endpoint_returns_ranked_results(tmp_path: Path) -> None:
     database = make_database(tmp_path)
     seed_record(tmp_path, database)
+    database.embedding_service = FakeEmbeddingService([0.3, 0.9, 0.0, 0.0])
     app.dependency_overrides[get_sample_database] = lambda: database
     client = TestClient(app)
 
