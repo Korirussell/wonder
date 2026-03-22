@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from "next/server";
  * - tempo_bpm: number
  */
 
-const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
+const AGENT_API_URL = process.env.AGENT_API_URL || "http://localhost:8001";
 
 export async function POST(req: NextRequest) {
   try {
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
 
     console.log(`[LoadMidiNotes] Fetching notes for midi_id: ${midi_id}`);
 
-    const response = await fetch(`${PYTHON_API_URL}/midi/${encodeURIComponent(midi_id)}`, {
+    const response = await fetch(`${AGENT_API_URL}/audio/midi/${encodeURIComponent(midi_id)}`, {
       method: "GET",
     });
 
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: "Cannot connect to Python REST API. Make sure the server is running.",
+          error: "Cannot connect to agent server. Make sure wonder-agent is running on port 8001.",
           notes: [],
           note_count: 0,
         },
