@@ -336,4 +336,92 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ["audio_data", "speed_factor"],
     },
   },
+
+  // ─── Browser DAW ─────────────────────────────────────────────────────────────
+  {
+    name: "createTrack",
+    description: "Create a new audio track in the browser DAW (no Ableton required). Use this when the user wants to add a track to the browser DAW.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        name: { type: SchemaType.STRING, description: "Track name" },
+        color: { type: SchemaType.STRING, description: "Hex color string e.g. '#C1E1C1'" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "addBlock",
+    description: "Add an audio block to a browser DAW track at a specific measure position.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        trackId: { type: SchemaType.STRING, description: "Track ID" },
+        name: { type: SchemaType.STRING, description: "Block name" },
+        startMeasure: { type: SchemaType.NUMBER, description: "Starting measure (1-based)" },
+        durationMeasures: { type: SchemaType.NUMBER, description: "Duration in measures" },
+      },
+      required: ["trackId", "startMeasure", "durationMeasures"],
+    },
+  },
+  {
+    name: "moveBlock",
+    description: "Move a block in the browser DAW to a new starting measure.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        blockId: { type: SchemaType.STRING, description: "Block ID" },
+        newStartMeasure: { type: SchemaType.NUMBER, description: "New starting measure" },
+      },
+      required: ["blockId", "newStartMeasure"],
+    },
+  },
+  {
+    name: "deleteBlock",
+    description: "Delete a block from the browser DAW timeline.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: { blockId: { type: SchemaType.STRING } },
+      required: ["blockId"],
+    },
+  },
+  {
+    name: "setBPM",
+    description: "Set the browser DAW BPM/tempo.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: { bpm: { type: SchemaType.NUMBER, description: "BPM 40-300" } },
+      required: ["bpm"],
+    },
+  },
+  {
+    name: "generateAndPlaceAudio",
+    description: "Generate a sound using ElevenLabs AI and place it on a new browser DAW track at a specific measure. Use this to create beats, bass lines, pads, sound effects, or any audio layer directly in the DAW. The audio will appear as a waveform on the timeline and play back immediately.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        description: { type: SchemaType.STRING, description: "Sound to generate, be specific and descriptive. E.g. 'deep punchy 808 bass hit with long sub tail', 'crisp trap snare with crack', 'dark atmospheric trap pad in C minor'" },
+        durationSeconds: { type: SchemaType.NUMBER, description: "Duration in seconds, 0.5–4.0. Short for drums (0.5-1.5s), longer for pads/melodies (2-4s)" },
+        trackName: { type: SchemaType.STRING, description: "Name for the track, e.g. '808 Bass', 'Trap Pad', 'Snare'" },
+        startMeasure: { type: SchemaType.NUMBER, description: "Where to place the block on the timeline (1-based measure number)" },
+        durationMeasures: { type: SchemaType.NUMBER, description: "How many measures the block occupies on the timeline" },
+        color: { type: SchemaType.STRING, description: "Hex color for the track, e.g. '#FCA5A5' for drums, '#BAE6FD' for pads" },
+      },
+      required: ["description", "trackName", "startMeasure"],
+    },
+  },
+  {
+    name: "setDrumPattern",
+    description: "Fill the drum rack step sequencer with a rhythmic pattern. Each array contains 16 booleans representing 16 steps in one bar. true = hit on that step, false = silent. Call setBPM first, then this tool. The drum rack starts playing immediately.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        kick:    { type: SchemaType.ARRAY, items: { type: SchemaType.BOOLEAN }, description: "16-step kick drum pattern. Trap: [T,F,F,F,T,F,F,F,...]. House: [T,F,F,F,T,F,F,F,T,F,F,F,T,F,F,F]" },
+        snare:   { type: SchemaType.ARRAY, items: { type: SchemaType.BOOLEAN }, description: "16-step snare pattern. Standard: [F,F,F,F,T,F,F,F,F,F,F,F,T,F,F,F]" },
+        hihat:   { type: SchemaType.ARRAY, items: { type: SchemaType.BOOLEAN }, description: "16-step closed hi-hat pattern. Dense: all true. Trap rolls: [T,T,T,T,T,T,T,T,T,T,T,T,T,T,T,T]" },
+        openHat: { type: SchemaType.ARRAY, items: { type: SchemaType.BOOLEAN }, description: "16-step open hi-hat pattern. Usually sparse, e.g. [F,F,F,F,F,F,F,T,F,F,F,F,F,F,F,T]" },
+      },
+      required: ["kick", "snare", "hihat"],
+    },
+  },
 ];

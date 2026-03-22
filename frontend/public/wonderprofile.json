@@ -1,0 +1,52 @@
+{
+  "producer": {
+    "name": "Kori",
+    "alias": "wonder.kori",
+    "daw": "Ableton Live 12",
+    "interface": "Scarlett Focusrite"
+  },
+  "genres": ["lo-fi hip hop", "neo-soul", "ambient", "boom-bap", "analog house"],
+  "influences": ["Sade", "Nujabes", "J Dilla", "Toro y Moi", "Kaytranada", "Tom Misch", "FKJ", "Mac DeMarco"],
+  "aesthetic": {
+    "vibe": "warm analog, vinyl texture, late-night studio feel",
+    "adjectives": ["dusty", "warm", "spacious", "intimate", "organic"],
+    "avoids": ["harsh digital", "EDM drops", "overcompressed", "generic trap"]
+  },
+  "plugins": {
+    "effects": [
+      { "name": "RC-20 Retro Color", "use": "vinyl warmth, wobble, noise" },
+      { "name": "Vulf Compressor", "use": "punchy parallel compression" },
+      { "name": "SketchCassette II", "use": "tape saturation, wow/flutter" },
+      { "name": "OTT", "use": "multiband compression on synths" },
+      { "name": "ValhallaVintageVerb", "use": "lush reverb tails" },
+      { "name": "Soundtoys Decapitator", "use": "harmonic saturation" },
+      { "name": "FabFilter Pro-Q 3", "use": "surgical EQ" }
+    ],
+    "instruments": [
+      { "name": "Arturia Analog Lab", "use": "vintage keys, Rhodes, Wurlitzer" },
+      { "name": "Serum", "use": "wavetable bass, pads" },
+      { "name": "Kontakt", "use": "sampled instruments, textures" }
+    ]
+  },
+  "drums": {
+    "preferred_kits": ["SP-404 MPC chops", "vinyl drum breaks", "lo-fi processed acoustic"],
+    "kick_character": "warm, round, sub-heavy, slightly saturated",
+    "snare_character": "dusty, rimshot layers, vinyl crackle bleed",
+    "hat_character": "organic, slightly open, off-grid swing"
+  },
+  "production_style": {
+    "bpm_range": [75, 95],
+    "default_bpm": 85,
+    "swing": 0.18,
+    "preferred_keys": ["A minor", "D minor", "F minor", "Eb major", "Gb major"],
+    "time_signatures": ["4/4"],
+    "humanization": "heavy — velocity variation, slight timing drift, ghost notes"
+  },
+  "sample_packs": ["Splice Lo-Fi Collection", "Crabtree Music Library", "Kingsway Music Library"],
+  "sauce_racks": {
+    "lofi_master": ["RC-20 → SketchCassette → ValhallaVintageVerb"],
+    "drum_bus": ["Vulf Compressor → Decapitator → OTT (subtle)"],
+    "bass_chain": ["Decapitator → FabFilter Pro-Q 3 → Vulf Compressor"],
+    "vocal_chain": ["FabFilter Pro-Q 3 → ValhallaVintageVerb → RC-20 (light)"]
+  }
+}

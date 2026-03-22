@@ -89,3 +89,47 @@ export interface WonderProfile {
   bpmRange: [number, number];
   defaultKey: string;
 }
+
+// ─── Browser DAW Types ────────────────────────────────────────────────────────
+
+export interface DAWTrack {
+  id: string;
+  name: string;
+  color: string; // hex e.g. "#C1E1C1"
+  muted: boolean;
+  volume: number; // 0–100
+  audioBlob?: Blob;
+  audioStorageId?: string; // IndexedDB key
+  waveformCache?: number[];
+}
+
+export interface DAWBlock {
+  id: string;
+  trackId: string;
+  name: string;
+  startMeasure: number; // 1-based, 0.25 snap granularity
+  durationMeasures: number;
+  color?: string;
+}
+
+export interface DAWTransport {
+  isPlaying: boolean;
+  currentMeasure: number;
+  bpm: number;
+  totalMeasures: number;
+}
+
+export interface DrumPattern {
+  kick:    boolean[];  // 16 steps
+  snare:   boolean[];
+  hihat:   boolean[];
+  openHat: boolean[];
+}
+
+export interface DAWState {
+  transport: DAWTransport;
+  tracks: DAWTrack[];
+  blocks: DAWBlock[];
+  selectedBlockId: string | null;
+  drumPattern?: DrumPattern;
+}

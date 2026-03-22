@@ -1,595 +1,413 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { Paperclip, Mic, Send, StopCircle, Music2, X } from "lucide-react";
-import { ChatMessage, AudioAttachment } from "@/types";
+import { useEffect, useRef, useState } from "react";
+import { useChat } from "@ai-sdk/react";
+import { isToolUIPart } from "ai";
+import { Paperclip, Mic, StopCircle, Music2, X, Send, Bot, Search } from "lucide-react";
+import { useDAWContext } from "@/lib/DAWContext";
+import { searchSamples } from "@/lib/sampleSearch";
+import ListeningAnalysis from "@/components/ListeningAnalysis";
+import type { AudioAttachment } from "@/types";
 
-const INITIAL_MESSAGES: ChatMessage[] = [
-  {
-    id: "1",
-    role: "assistant",
-    content:
-      "Hey! I'm Wonder — your AI music copilot. Tell me what you want to make, or hum a melody and I'll build the session in Ableton. What are we making today?",
-    timestamp: new Date(),
-  },
-];
+const DAW_TRACK_COLORS = ["#C1E1C1","#E9D5FF","#FEF08A","#FCA5A5","#BAE6FD","#DDD6FE","#BBF7D0","#FED7AA"];
 
-interface TapNote {
-  startMs: number;
-  durationMs: number;
+// ─── Tap helpers ──────────────────────────────────────────────────────────────
+
+interface TapNote { startMs: number; durationMs: number; }
+
+function median(arr: number[]) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 === 0 ? (s[m-1]+s[m])/2 : s[m];
 }
-
-interface PendingRhythm {
-  capture_ms: number;
-  reference_bpm: number;
-  timing_confidence: number;
-  quantization_hint: "light" | "medium" | "strong";
-  note_starts_beats: number[];
-  note_durations_beats: number[];
-  notes_ms: TapNote[];
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return (sorted[mid - 1] + sorted[mid]) / 2;
-  }
-  return sorted[mid];
-}
-
-function analyzeTapNotes(notes: TapNote[]): PendingRhythm | null {
-  if (notes.length === 0) return null;
-
-  const sortedNotes = [...notes].sort((a, b) => a.startMs - b.startMs);
-  const captureMs = Math.max(
-    sortedNotes[sortedNotes.length - 1].startMs + sortedNotes[sortedNotes.length - 1].durationMs,
-    1
-  );
-
-  const onsets = sortedNotes.map((n) => n.startMs);
-  const intervals: number[] = [];
-  for (let i = 1; i < onsets.length; i++) {
-    intervals.push(onsets[i] - onsets[i - 1]);
-  }
-
-  const medianIoi = intervals.length > 0 ? median(intervals) : 500;
-  const referenceBpm = clamp(60000 / Math.max(medianIoi, 120), 50, 220);
-
-  const meanIoi = intervals.length > 0
-    ? intervals.reduce((sum, value) => sum + value, 0) / intervals.length
-    : medianIoi;
-  const stdIoi = intervals.length > 1
-    ? Math.sqrt(
-      intervals.reduce((sum, value) => sum + (value - meanIoi) ** 2, 0) / intervals.length
-    )
-    : 0;
-  const cv = meanIoi > 0 ? stdIoi / meanIoi : 1;
-  const timingConfidence = clamp(1 - cv * 1.5, 0, 1);
-
-  const quantizationHint: "light" | "medium" | "strong" =
-    timingConfidence > 0.8 ? "light" : timingConfidence > 0.6 ? "medium" : "strong";
-
-  const noteStartsBeats = sortedNotes.map((n) => (n.startMs / 60000) * referenceBpm);
-  const noteDurationsBeats = sortedNotes.map((n) =>
-    clamp((n.durationMs / 60000) * referenceBpm, 0.0625, 8)
-  );
-
+function clamp(v: number, lo: number, hi: number) { return Math.min(hi, Math.max(lo, v)); }
+function analyzeTaps(notes: TapNote[]) {
+  if (!notes.length) return null;
+  const sorted = [...notes].sort((a,b) => a.startMs-b.startMs);
+  const onsets = sorted.map(n => n.startMs);
+  const iois = onsets.slice(1).map((t,i) => t-onsets[i]);
+  const medIoi = iois.length ? median(iois) : 500;
+  const bpm = clamp(60000/Math.max(medIoi,120), 50, 220);
+  const mean = iois.length ? iois.reduce((s,v)=>s+v,0)/iois.length : medIoi;
+  const std = iois.length>1 ? Math.sqrt(iois.reduce((s,v)=>s+(v-mean)**2,0)/iois.length) : 0;
+  const cv = mean>0 ? std/mean : 1;
+  const conf = clamp(1-cv*1.5, 0, 1);
   return {
-    capture_ms: captureMs,
-    reference_bpm: Number(referenceBpm.toFixed(2)),
-    timing_confidence: Number(timingConfidence.toFixed(2)),
-    quantization_hint: quantizationHint,
-    note_starts_beats: noteStartsBeats,
-    note_durations_beats: noteDurationsBeats,
-    notes_ms: sortedNotes,
+    reference_bpm: Number(bpm.toFixed(2)),
+    timing_confidence: Number(conf.toFixed(2)),
+    quantization_hint: conf>0.8?"light":conf>0.6?"medium":"strong" as "light"|"medium"|"strong",
+    note_starts_beats: sorted.map(n=>(n.startMs/60000)*bpm),
+    note_durations_beats: sorted.map(n=>clamp((n.durationMs/60000)*bpm,0.0625,8)),
+    notes_ms: sorted,
+    capture_ms: Math.max(sorted[sorted.length-1].startMs+sorted[sorted.length-1].durationMs, 1),
   };
 }
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function CopilotChat() {
-  const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
-  const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
+  const { state: dawState, dispatch: dawDispatch } = useDAWContext();
+  const dawStateRef = useRef(dawState);
+  useEffect(() => { dawStateRef.current = dawState; });
+
   const [pendingAudio, setPendingAudio] = useState<AudioAttachment | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  // Tap rhythm
   const [isTapRecording, setIsTapRecording] = useState(false);
   const [tapNotes, setTapNotes] = useState<TapNote[]>([]);
   const [tapStartedAt, setTapStartedAt] = useState<number | null>(null);
   const [tapNow, setTapNow] = useState(0);
-  const activeTapStartRef = useRef<number | null>(null);
-  const [pendingRhythm, setPendingRhythm] = useState<PendingRhythm | null>(null);
+  const activeTapRef = useRef<number | null>(null);
+  const [pendingRhythm, setPendingRhythm] = useState<ReturnType<typeof analyzeTaps>>(null);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  // ── useChat (Vercel AI SDK streaming) ────────────────────────────────────
 
-  // Auto-grow textarea
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`;
-    }
-  }, [input]);
+  const [input, setInput] = useState("");
+
+  const { messages, setMessages, sendMessage: chatSendMessage, status, addToolResult } = useChat({
+    sendAutomaticallyWhen: ({ messages: msgs }) => {
+      // Re-send automatically when the last assistant message has tool invocations with outputs
+      const last = msgs[msgs.length - 1];
+      if (!last || last.role !== "assistant") return false;
+      return last.parts.some(p => isToolUIPart(p) && "state" in p && p.state === "output-available");
+    },
+    onToolCall: async ({ toolCall }) => {
+      const args = toolCall.input as Record<string, unknown>;
+      const s = dawStateRef.current;
+      let result = "done";
+
+      switch (toolCall.toolName) {
+        case "setBPM":
+          dawDispatch({ type: "SET_TRANSPORT", payload: { bpm: args.bpm as number } });
+          result = `BPM set to ${args.bpm}`;
+          break;
+
+        case "setDrumPattern":
+          dawDispatch({ type: "SET_DRUM_PATTERN", payload: {
+            kick:    args.kick    as boolean[],
+            snare:   args.snare   as boolean[],
+            hihat:   args.hihat   as boolean[],
+            openHat: (args.openHat as boolean[]) ?? Array(16).fill(false),
+          }});
+          result = "Drum pattern applied";
+          break;
+
+        case "createTrack": {
+          const color = (args.color as string) ?? DAW_TRACK_COLORS[s.tracks.length % DAW_TRACK_COLORS.length];
+          const id = crypto.randomUUID();
+          dawDispatch({ type: "ADD_TRACK", payload: { id, name: args.name as string, color, muted: false, volume: 80 } });
+          result = `Track created: ${args.name} (id: ${id})`;
+          break;
+        }
+
+        case "addBlock":
+          dawDispatch({ type: "ADD_BLOCK", payload: { id: crypto.randomUUID(), trackId: args.trackId as string, name: args.name as string, startMeasure: args.startMeasure as number, durationMeasures: args.durationMeasures as number } });
+          result = "Block added";
+          break;
+
+        case "moveBlock":
+          dawDispatch({ type: "UPDATE_BLOCK", payload: { id: args.blockId as string, startMeasure: args.newStartMeasure as number } });
+          result = "Block moved";
+          break;
+
+        case "deleteBlock":
+          dawDispatch({ type: "DELETE_BLOCK", payload: args.blockId as string });
+          result = "Block deleted";
+          break;
+
+        case "deleteTrack":
+          dawDispatch({ type: "DELETE_TRACK", payload: args.trackId as string });
+          result = "Track deleted";
+          break;
+
+        case "setVolume":
+          dawDispatch({ type: "UPDATE_TRACK", payload: { id: args.trackId as string, volume: args.volume as number } });
+          result = `Volume set to ${args.volume}`;
+          break;
+
+        case "setMute":
+          dawDispatch({ type: "UPDATE_TRACK", payload: { id: args.trackId as string, muted: args.muted as boolean } });
+          result = `Track ${args.muted ? "muted" : "unmuted"}`;
+          break;
+
+        case "generateAndPlaceAudio": {
+          try {
+            const resp = await fetch("/api/sfx", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                prompt: args.description as string,
+                duration: (args.durationSeconds as number) ?? 2,
+              }),
+            });
+            if (!resp.ok) { result = "Failed to generate audio — check ElevenLabs API key"; break; }
+            const audioBlob = await resp.blob();
+            const trackId = crypto.randomUUID();
+            const color = (args.color as string) ?? DAW_TRACK_COLORS[s.tracks.length % DAW_TRACK_COLORS.length];
+            dawDispatch({ type: "ADD_TRACK", payload: { id: trackId, name: args.trackName as string, color, muted: false, volume: 80 } });
+            dawDispatch({ type: "LOAD_AUDIO", payload: { trackId, blob: audioBlob } });
+            dawDispatch({ type: "ADD_BLOCK", payload: { id: crypto.randomUUID(), trackId, name: args.trackName as string, startMeasure: (args.startMeasure as number) ?? 1, durationMeasures: (args.durationMeasures as number) ?? 4 } });
+            result = `Audio generated and placed on track "${args.trackName}"`;
+          } catch {
+            result = "Audio generation failed";
+          }
+          break;
+        }
+
+        case "searchSamples": {
+          try {
+            const results = await searchSamples(args.query as string);
+            if (results.length === 0) { result = "No samples found matching that query."; break; }
+            const summary = results.slice(0, 5).map(s => `- ${s.name} (${s.instrument}, ${s.tags.join(", ")}${s.bpm ? `, ${s.bpm}bpm` : ""})`).join("\n");
+            result = `Found ${results.length} sample(s):\n${summary}`;
+          } catch {
+            result = "Sample search failed";
+          }
+          break;
+        }
+      }
+
+      // Report tool result back to the chat
+      addToolResult({ tool: toolCall.toolName, toolCallId: toolCall.toolCallId, output: result });
+    },
+  });
+
+  const isLoading = status === "streaming" || status === "submitted";
+
+  // Auto-scroll on new messages
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isLoading]);
+
+  // ── Send ──────────────────────────────────────────────────────────────────
+
+  const sendMessage = async (overrideText?: string) => {
+    const text = overrideText ?? input.trim();
+    if (!text || isLoading) return;
+
+    const rhythmSuffix = pendingRhythm
+      ? `\n\n[Captured rhythm: ${pendingRhythm.note_starts_beats.length} notes, ${pendingRhythm.reference_bpm} BPM ref, ${pendingRhythm.quantization_hint} quantize]`
+      : "";
+
+    setInput("");
+    setPendingAudio(null);
+    setPendingRhythm(null);
+
+    await chatSendMessage({ text: text + rhythmSuffix });
+  };
+
+  // ── Audio recording ────────────────────────────────────────────────────────
 
   const handleAudioFile = (file: File) => {
+    setIsAnalyzing(true);
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64 = (reader.result as string).split(",")[1];
-      setPendingAudio({
-        filename: file.name,
-        base64,
-        mimeType: file.type || "audio/wav",
-        size: file.size,
-      });
+      setPendingAudio({ filename: file.name, base64, mimeType: file.type || "audio/wav", size: file.size });
     };
     reader.readAsDataURL(file);
-  };
-
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
-
-    const content = pendingAudio
-      ? `${input.trim()}\n\n📎 ${pendingAudio.filename}`
-      : input.trim();
-
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: "user",
-      content,
-      timestamp: new Date(),
-      audioAttachment: pendingAudio ?? undefined,
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
-    const capturedAudio = pendingAudio;
-    setPendingAudio(null);
-    setIsLoading(true);
-
-    const rhythmContext = pendingRhythm
-      ? {
-          capture_ms: pendingRhythm.capture_ms,
-          reference_bpm: pendingRhythm.reference_bpm,
-          timing_confidence: pendingRhythm.timing_confidence,
-          quantization_hint: pendingRhythm.quantization_hint,
-          note_starts_beats: pendingRhythm.note_starts_beats,
-          note_durations_beats: pendingRhythm.note_durations_beats,
-          output_mode: "new_track" as const,
-        }
-      : undefined;
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [...messages, userMsg].map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          rhythmContext,
-          audioData: capturedAudio?.base64,
-          mimeType: capturedAudio?.mimeType,
-        }),
-      });
-
-      const data = await res.json();
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: data.content,
-          timestamp: new Date(),
-        },
-      ]);
-      setPendingRhythm(null);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: "Connection error — make sure the Wonder backend is running.",
-          timestamp: new Date(),
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!isTapRecording || tapStartedAt === null) return;
-
-    const timer = window.setInterval(() => {
-      setTapNow(performance.now() - tapStartedAt);
-    }, 33);
-
-    return () => window.clearInterval(timer);
-  }, [isTapRecording, tapStartedAt]);
-
-  useEffect(() => {
-    if (!isTapRecording || tapStartedAt === null) return;
-
-    const handleSpaceDown = (event: KeyboardEvent) => {
-      if (event.code !== "Space") return;
-      event.preventDefault();
-      if (event.repeat || activeTapStartRef.current !== null) return;
-      activeTapStartRef.current = performance.now() - tapStartedAt;
-    };
-
-    const handleSpaceUp = (event: KeyboardEvent) => {
-      if (event.code !== "Space") return;
-      event.preventDefault();
-      if (activeTapStartRef.current === null) return;
-
-      const end = performance.now() - tapStartedAt;
-      const start = activeTapStartRef.current;
-      const duration = Math.max(40, end - start);
-      setTapNotes((prev) => [...prev, { startMs: start, durationMs: duration }]);
-      activeTapStartRef.current = null;
-    };
-
-    window.addEventListener("keydown", handleSpaceDown, { passive: false });
-    window.addEventListener("keyup", handleSpaceUp, { passive: false });
-
-    return () => {
-      window.removeEventListener("keydown", handleSpaceDown);
-      window.removeEventListener("keyup", handleSpaceUp);
-    };
-  }, [isTapRecording, tapStartedAt]);
-
-  const startTapRecording = () => {
-    if (isLoading) return;
-    activeTapStartRef.current = null;
-    setTapNotes([]);
-    setPendingRhythm(null);
-    setTapStartedAt(performance.now());
-    setTapNow(0);
-    setIsTapRecording(true);
-  };
-
-  const stopTapRecording = () => {
-    if (!isTapRecording || tapStartedAt === null) return;
-
-    let finalizedNotes = tapNotes;
-    if (activeTapStartRef.current !== null) {
-      const end = performance.now() - tapStartedAt;
-      const start = activeTapStartRef.current;
-      const duration = Math.max(40, end - start);
-      finalizedNotes = [...tapNotes, { startMs: start, durationMs: duration }];
-      activeTapStartRef.current = null;
-    }
-
-    setTapNotes(finalizedNotes);
-    setIsTapRecording(false);
-    setTapNow(0);
-
-    const analyzed = analyzeTapNotes(finalizedNotes);
-    if (analyzed) {
-      setPendingRhythm(analyzed);
-    }
-  };
-
-  const timelineNotes: TapNote[] = (() => {
-    if (isTapRecording && activeTapStartRef.current !== null) {
-      return [
-        ...tapNotes,
-        {
-          startMs: activeTapStartRef.current,
-          durationMs: Math.max(40, tapNow - activeTapStartRef.current),
-        },
-      ];
-    }
-    if (isTapRecording) return tapNotes;
-    return pendingRhythm?.notes_ms ?? [];
-  })();
-
-  const timelineDurationMs = Math.max(
-    isTapRecording ? tapNow : 0,
-    ...timelineNotes.map((n) => n.startMs + n.durationMs),
-    1
-  );
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
   };
 
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
+      const mr = new MediaRecorder(stream);
+      mediaRecorderRef.current = mr;
       audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        stream.getTracks().forEach((track) => track.stop());
-        await sendAudioMessage(audioBlob);
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-    } catch (error) {
-      console.error("Error accessing microphone:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: "Could not access microphone. Please check your browser permissions.",
-          timestamp: new Date(),
-        },
-      ]);
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-    }
-  };
-
-  const sendAudioMessage = async (audioBlob: Blob) => {
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: "user",
-      content: "🎤 [Voice message]",
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setIsLoading(true);
-
-    try {
-      // Convert audio blob to base64
-      const reader = new FileReader();
-      const base64Audio = await new Promise<string>((resolve) => {
+      mr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      mr.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        stream.getTracks().forEach(t => t.stop());
+        const reader = new FileReader();
         reader.onloadend = () => {
           const base64 = (reader.result as string).split(",")[1];
-          resolve(base64);
+          setPendingAudio({ filename: "voice.webm", base64, mimeType: "audio/webm", size: blob.size });
         };
-        reader.readAsDataURL(audioBlob);
-      });
-
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [...messages, userMsg].map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          audioData: base64Audio,
-          mimeType: "audio/webm",
-        }),
-      });
-
-      const data = await res.json();
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: data.content,
-          timestamp: new Date(),
-        },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: "Connection error — make sure the Wonder backend is running.",
-          timestamp: new Date(),
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
+        reader.readAsDataURL(blob);
+      };
+      mr.start();
+      setIsRecording(true);
+    } catch { /* denied */ }
   };
 
-  return (
-    <section className="w-[40%] flex flex-col border-r-2 border-[#2D2D2D] bg-white/70 backdrop-blur-sm">
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex flex-col gap-2 max-w-[90%] ${
-              msg.role === "user" ? "items-end ml-auto" : "items-start"
-            }`}
-          >
-            {/* Label */}
-            <span className="font-label text-[10px] font-bold uppercase tracking-widest opacity-40 px-1">
-              {msg.role === "user" ? "You" : "Wonder Copilot"}
-            </span>
+  const stopRecording = () => { mediaRecorderRef.current?.stop(); setIsRecording(false); };
 
-            {/* Bubble */}
-            <div
-              className={`border-2 border-[#2D2D2D] p-4 rounded-2xl hard-shadow text-sm leading-relaxed font-body ${
-                msg.role === "assistant"
-                  ? "bg-[#E9D5FF]"
-                  : "bg-white"
-              }`}
-            >
-              {msg.content}
+  // ── Tap rhythm ─────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!isTapRecording || tapStartedAt === null) return;
+    const t = setInterval(() => setTapNow(performance.now()-tapStartedAt), 33);
+    return () => clearInterval(t);
+  }, [isTapRecording, tapStartedAt]);
+
+  useEffect(() => {
+    if (!isTapRecording || tapStartedAt === null) return;
+    const down = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return; e.preventDefault();
+      if (e.repeat || activeTapRef.current !== null) return;
+      activeTapRef.current = performance.now()-tapStartedAt;
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return; e.preventDefault();
+      if (activeTapRef.current === null) return;
+      const end = performance.now()-tapStartedAt;
+      setTapNotes(prev => [...prev, { startMs: activeTapRef.current!, durationMs: Math.max(40, end-activeTapRef.current!) }]);
+      activeTapRef.current = null;
+    };
+    window.addEventListener("keydown", down, { passive: false });
+    window.addEventListener("keyup", up, { passive: false });
+    return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
+  }, [isTapRecording, tapStartedAt]);
+
+  const startTap = () => { activeTapRef.current=null; setTapNotes([]); setPendingRhythm(null); setTapStartedAt(performance.now()); setTapNow(0); setIsTapRecording(true); };
+  const stopTap = () => {
+    if (!isTapRecording || tapStartedAt===null) return;
+    let notes = tapNotes;
+    if (activeTapRef.current!==null) {
+      notes = [...tapNotes, { startMs: activeTapRef.current, durationMs: Math.max(40,(performance.now()-tapStartedAt)-activeTapRef.current) }];
+      activeTapRef.current = null;
+    }
+    setTapNotes(notes); setIsTapRecording(false); setTapNow(0); setPendingRhythm(analyzeTaps(notes));
+  };
+
+  const timelineNotes = isTapRecording && activeTapRef.current!==null
+    ? [...tapNotes, { startMs: activeTapRef.current, durationMs: Math.max(40, tapNow-activeTapRef.current) }]
+    : isTapRecording ? tapNotes : pendingRhythm?.notes_ms ?? [];
+  const timelineDurMs = Math.max(isTapRecording ? tapNow : 0, ...timelineNotes.map(n=>n.startMs+n.durationMs), 1);
+
+  // Filter to user/assistant messages for display
+  const displayMessages = messages.filter(m => m.role === "user" || m.role === "assistant");
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  return (
+    <section className="h-full w-full flex flex-col border-r border-[#DEDEDE] bg-white">
+      {/* Header */}
+      <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[#EBEBEB] flex-shrink-0">
+        <div className="w-7 h-7 rounded-lg bg-[#2D2D2D] flex items-center justify-center flex-shrink-0">
+          <Bot size={14} color="white" strokeWidth={1.5} />
+        </div>
+        <span className="text-[13px] font-bold text-[#2D2D2D] font-headline flex-1">Wonder AI</span>
+        <span className="text-[10px] font-bold font-mono bg-[#FFE566] text-[#2D2D2D] px-2 py-0.5 rounded-full uppercase tracking-wide">DAW</span>
+        {displayMessages.length > 0 && (
+          <button onClick={() => setMessages([])} className="text-[10px] font-mono text-[#2D2D2D]/30 hover:text-[#2D2D2D]/70 transition-colors">Clear</button>
+        )}
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 custom-scrollbar">
+        {displayMessages.length === 0 && (
+          <div className="text-center pt-8">
+            <p className="font-mono text-[10px] uppercase tracking-widest text-[#2D2D2D]/25 mb-3">Try saying</p>
+            {["make a trap beat at 140 BPM", "lo-fi hip hop beat 85 BPM", "find me a warm vinyl kick"].map(s => (
+              <button key={s} onClick={() => sendMessage(s)} className="block w-full text-left px-3 py-2 mb-1.5 border border-[#E0E0E0] rounded-xl text-[11px] font-body text-[#2D2D2D]/60 hover:bg-[#F5F5F2] hover:text-[#2D2D2D] transition-colors">
+                {s.startsWith("find") ? <><Search size={10} className="inline mr-1.5 opacity-40" />{s}</> : s}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {displayMessages.map(msg => (
+          <div key={msg.id} className="flex flex-col gap-1.5">
+            <span className="text-[9px] font-mono font-bold uppercase tracking-[0.15em] text-[#2D2D2D]/35 px-0.5">
+              {msg.role === "user" ? "YOU" : "WONDER AI"}
+            </span>
+            <div className={`border border-[#E0E0E0] rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed text-[#2D2D2D] font-body whitespace-pre-wrap ${
+              msg.role === "assistant" ? "bg-white shadow-[2px_2px_0px_0px_rgba(0,0,0,0.06)]" : "bg-[#F7F7F5]"
+            }`}>
+              {msg.parts.filter(p => p.type === "text").map(p => p.text).join("")}
             </div>
           </div>
         ))}
 
-        {/* Loading indicator */}
         {isLoading && (
-          <div className="flex flex-col gap-2 max-w-[90%] items-start">
-            <span className="font-label text-[10px] font-bold uppercase tracking-widest opacity-40 px-1">
-              Wonder Copilot
-            </span>
-            <div className="bg-[#E9D5FF] border-2 border-[#2D2D2D] p-4 rounded-2xl hard-shadow flex items-center gap-2">
-              <div className="flex gap-1">
-                {[0, 1, 2].map((i) => (
-                  <div
-                    key={i}
-                    className="w-1.5 h-1.5 bg-[#68587c] rounded-full animate-bounce"
-                    style={{ animationDelay: `${i * 0.15}s` }}
-                  />
-                ))}
-              </div>
-              <span className="text-xs font-mono text-[#68587c] opacity-70">thinking...</span>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[9px] font-mono font-bold uppercase tracking-[0.15em] text-[#2D2D2D]/35 px-0.5">WONDER AI · JUST NOW</span>
+            <div className="bg-white border border-[#E0E0E0] rounded-xl px-3.5 py-2.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.06)] flex items-center gap-2">
+              {[0,1,2].map(i => <div key={i} className="w-1.5 h-1.5 bg-[#2D2D2D]/40 rounded-full animate-bounce" style={{ animationDelay: `${i*0.15}s` }} />)}
             </div>
           </div>
         )}
-
         <div ref={bottomRef} />
       </div>
 
-      {/* Input area */}
-      <div className="px-6 py-5 flex-shrink-0">
-        <div className="relative bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow flex items-end p-3 gap-3 focus-within:ring-2 focus-within:ring-[#C1E1C1] transition-all">
-          {pendingAudio && (
-            <div className="absolute bottom-full mb-2 left-3 flex items-center gap-2 bg-[#FEF08A] border-2 border-[#2D2D2D] rounded-xl px-3 py-1.5 hard-shadow-sm text-xs font-mono">
-              <span>📎 {pendingAudio.filename}</span>
-              <button onClick={() => setPendingAudio(null)} className="text-[#2D2D2D]/60 hover:text-[#2D2D2D]">×</button>
-            </div>
+      {/* Listening Analysis */}
+      <ListeningAnalysis
+        active={isAnalyzing}
+        targetBPM={dawState.transport.bpm}
+        onComplete={(result) => {
+          setIsAnalyzing(false);
+          dawDispatch({ type: "SET_TRANSPORT", payload: { bpm: result.bpm } });
+        }}
+        onCancel={() => setIsAnalyzing(false)}
+      />
+
+      {/* Tap rhythm panel */}
+      {(isTapRecording || pendingRhythm) && (
+        <div className="mx-4 mb-2 border border-[#E0E0E0] rounded-xl bg-white p-3 space-y-2 shadow-sm flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-[#2D2D2D]/50">
+              {isTapRecording ? "Tap capture armed" : "Captured rhythm"}
+            </span>
+            <span className="font-mono text-[9px] text-[#2D2D2D]/40">
+              {(pendingRhythm?.reference_bpm ?? 0).toFixed(1)} bpm · {timelineNotes.length} notes
+            </span>
+          </div>
+          <div className="h-10 border border-[#E0E0E0] rounded-lg bg-[#FAFAF8] relative overflow-hidden">
+            {timelineNotes.map((note, i) => (
+              <div key={`${note.startMs}-${i}`} className="absolute top-1/2 -translate-y-1/2 h-4 bg-[#2D2D2D] rounded"
+                style={{ left: `${(note.startMs/timelineDurMs)*100}%`, width: `${Math.max((note.durationMs/timelineDurMs)*100,0.8)}%` }} />
+            ))}
+          </div>
+          {pendingRhythm && !isTapRecording && (
+            <button onClick={() => setPendingRhythm(null)} className="ml-auto flex items-center justify-center w-6 h-6 rounded border border-[#E0E0E0] hover:bg-gray-50">
+              <X size={12} strokeWidth={2} />
+            </button>
           )}
-          <button
-            onClick={() => audioInputRef.current?.click()}
-            className="p-2 text-[#2D2D2D]/40 hover:text-[#2D2D2D] transition-colors self-end"
-          >
-            <Paperclip size={18} />
-          </button>
-          <input
-            ref={audioInputRef}
-            type="file"
-            accept="audio/*"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleAudioFile(file);
-              e.target.value = "";
-            }}
-          />
-
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Message Wonder... (or hum a melody)"
-            rows={1}
-            className="flex-1 border-none focus:ring-0 bg-transparent resize-none py-2 text-sm font-body leading-relaxed outline-none min-h-[40px] max-h-40"
-          />
-
-          {/* Mic button */}
-          <button
-            onClick={isRecording ? stopRecording : startRecording}
-            className={`w-11 h-11 border-2 border-[#2D2D2D] rounded-xl flex items-center justify-center flex-shrink-0 self-end ${
-              isRecording
-                ? "bg-[#fa7150] recording-pulse"
-                : "bg-[#C1E1C1] hard-shadow-sm interactive-push"
-            }`}
-          >
-            {isRecording ? (
-              <StopCircle size={18} strokeWidth={2.5} />
-            ) : (
-              <Mic size={18} strokeWidth={2.5} />
-            )}
-          </button>
-
-          {/* Tap rhythm button */}
-          <button
-            onClick={isTapRecording ? stopTapRecording : startTapRecording}
-            disabled={isRecording || isLoading}
-            className={`w-11 h-11 border-2 border-[#2D2D2D] rounded-xl flex items-center justify-center flex-shrink-0 self-end ${
-              isTapRecording
-                ? "bg-[#ffe082] recording-pulse"
-                : "bg-[#f4efe3] hard-shadow-sm interactive-push"
-            } disabled:opacity-40 disabled:cursor-not-allowed`}
-            title={isTapRecording ? "Stop rhythm capture" : "Capture rhythm with space bar"}
-          >
-            {isTapRecording ? <StopCircle size={18} strokeWidth={2.5} /> : <Music2 size={18} strokeWidth={2.5} />}
-          </button>
-
-          {/* Send button */}
-          <button
-            onClick={sendMessage}
-            disabled={!input.trim() || isLoading}
-            className="w-11 h-11 bg-[#2D2D2D] text-white border-2 border-[#2D2D2D] rounded-xl flex items-center justify-center flex-shrink-0 self-end hard-shadow-sm interactive-push disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            <Send size={16} strokeWidth={2.5} />
-          </button>
         </div>
+      )}
 
-        {(isTapRecording || pendingRhythm) && (
-          <div className="mt-3 border-2 border-[#2D2D2D] rounded-2xl bg-white p-3 hard-shadow-sm space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <span className="font-mono text-[10px] font-bold uppercase tracking-widest opacity-50">
-                {isTapRecording ? "Tap capture armed (space bar global)" : "Captured rhythm"}
-              </span>
-              <span className="font-mono text-[10px] font-bold uppercase tracking-widest opacity-40">
-                {(pendingRhythm?.reference_bpm ?? 0).toFixed(2)} BPM ref · {timelineNotes.length} notes
-              </span>
-            </div>
-
-            <div className="h-20 border-2 border-[#2D2D2D]/20 rounded-xl bg-[#FDFDFB] relative overflow-hidden">
-              <div className="absolute inset-0 flex">
-                {Array.from({ length: 16 }).map((_, i) => (
-                  <div key={i} className="flex-1 border-r border-[#2D2D2D]/10 last:border-r-0" />
-                ))}
-              </div>
-              {timelineNotes.map((note, i) => {
-                const left = (note.startMs / timelineDurationMs) * 100;
-                const width = Math.max((note.durationMs / timelineDurationMs) * 100, 0.8);
-                return (
-                  <div
-                    key={`${note.startMs}-${note.durationMs}-${i}`}
-                    className="absolute top-1/2 -translate-y-1/2 h-6 bg-[#4a664c] border border-[#2D2D2D] rounded"
-                    style={{ left: `${left}%`, width: `${width}%` }}
-                  />
-                );
-              })}
-            </div>
-
-            {pendingRhythm && !isTapRecording && (
-              <div className="flex items-center w-full pr-1">
-                <button
-                  onClick={() => setPendingRhythm(null)}
-                  aria-label="Clear captured rhythm"
-                  className="ml-auto h-8 w-8 p-1 border-2 border-[#2D2D2D] rounded-lg bg-white/80 hover:bg-white transition-colors flex items-center justify-center"
-                >
-                  <X size={14} strokeWidth={2.5} />
-                </button>
-              </div>
-            )}
+      {/* Input area */}
+      <div className="px-4 pb-4 flex-shrink-0">
+        {pendingAudio && (
+          <div className="mb-2 flex items-center gap-2 bg-[#FEF08A] border border-[#E0E0E0] rounded-lg px-3 py-1.5 text-[11px] font-mono">
+            <span className="flex-1 truncate">📎 {pendingAudio.filename}</span>
+            <button onClick={() => setPendingAudio(null)} className="text-[#2D2D2D]/60 hover:text-[#2D2D2D]"><X size={12} /></button>
           </div>
         )}
 
-        <p className="text-[9px] font-mono font-bold uppercase text-center mt-3 opacity-25 tracking-widest">
-          Enter to send · Shift+Enter new line · Tap button captures Space rhythm globally
-        </p>
+        <div className="flex items-end gap-2 bg-white border border-[#D8D8D8] rounded-xl px-3 py-2.5 focus-within:border-[#2D2D2D] transition-colors">
+          <button onClick={() => audioInputRef.current?.click()} className="text-[#2D2D2D]/30 hover:text-[#2D2D2D]/60 transition-colors pb-0.5 flex-shrink-0" title="Attach audio">
+            <Paperclip size={15} />
+          </button>
+          <input ref={audioInputRef} type="file" accept="audio/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleAudioFile(f); e.target.value=""; }} />
+
+          <textarea
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+            placeholder="Ask Wonder to build something..."
+            rows={1}
+            className="flex-1 border-none focus:ring-0 bg-transparent resize-none text-[13px] font-body leading-relaxed outline-none min-h-[22px] max-h-32 text-[#2D2D2D] placeholder:text-[#2D2D2D]/35"
+            onInput={e => { const el=e.currentTarget; el.style.height="auto"; el.style.height=`${Math.min(el.scrollHeight,120)}px`; }}
+          />
+
+          <button onClick={isRecording ? stopRecording : startRecording} className={`flex-shrink-0 pb-0.5 transition-colors ${isRecording ? "text-[#E53030]" : "text-[#2D2D2D]/30 hover:text-[#2D2D2D]/60"}`}>
+            {isRecording ? <StopCircle size={15} /> : <Mic size={15} />}
+          </button>
+
+          <button onClick={isTapRecording ? stopTap : startTap} disabled={isRecording || isLoading} className={`flex-shrink-0 pb-0.5 transition-colors disabled:opacity-30 ${isTapRecording ? "text-[#E5A030]" : "text-[#2D2D2D]/30 hover:text-[#2D2D2D]/60"}`}>
+            <Music2 size={15} />
+          </button>
+
+          <button onClick={() => sendMessage()} disabled={!input.trim() || isLoading} className="w-7 h-7 bg-[#2D2D2D] rounded-lg flex items-center justify-center flex-shrink-0 disabled:opacity-30 hover:bg-[#444] transition-opacity">
+            <Send size={12} color="white" strokeWidth={2.5} />
+          </button>
+        </div>
       </div>
     </section>
   );

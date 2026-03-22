@@ -1,0 +1,254 @@
+"use client";
+
+import { useEffect, useRef, useCallback } from "react";
+import type { DAWState, DAWTransport } from "@/types";
+import { toneEngine } from "./toneEngine";
+
+// ─── WAV Encoder ──────────────────────────────────────────────────────────────
+
+function encodeWAV(buffer: AudioBuffer): Blob {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const format = 1; // PCM
+  const bitDepth = 16;
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const samples = buffer.length * numChannels;
+  const dataSize = samples * bytesPerSample;
+  const ab = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(ab);
+  // RIFF header
+  const writeStr = (off: number, s: string) =>
+    [...s].forEach((c, i) => view.setUint8(off + i, c.charCodeAt(0)));
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, format, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+  let offset = 44;
+  for (let i = 0; i < buffer.length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      const s = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      offset += 2;
+    }
+  }
+  return new Blob([ab], { type: "audio/wav" });
+}
+
+// ─── Hook Interface ───────────────────────────────────────────────────────────
+
+interface UseDAWEngineProps {
+  state: DAWState;
+  dispatch: React.Dispatch<{ type: string; payload?: unknown }>;
+}
+
+interface DAWEngineReturn {
+  startPlayback: () => Promise<void>;
+  stopPlayback: () => void;
+  seekTo: (measure: number) => void;
+  exportToWAV: () => Promise<void>;
+}
+
+// ─── Hook (Tone.js powered) ──────────────────────────────────────────────────
+
+export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineReturn {
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const currentMeasureRef = useRef<number>(state.transport.currentMeasure);
+  const stateRef = useRef<DAWState>(state);
+  const loadedBlobsRef = useRef<Map<string, string>>(new Map()); // trackId → blobFingerprint
+
+  // Keep refs current
+  useEffect(() => {
+    stateRef.current = state;
+    currentMeasureRef.current = state.transport.currentMeasure;
+  });
+
+  // Sync BPM to Tone.Transport whenever it changes
+  useEffect(() => {
+    if (toneEngine.isReady()) {
+      toneEngine.setBPM(state.transport.bpm);
+    }
+  }, [state.transport.bpm]);
+
+  // Load track audio blobs into toneEngine stems
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const currentTracks = stateRef.current.tracks;
+    const validIds = new Set(currentTracks.map((t) => t.id));
+
+    // Clean up removed tracks from toneEngine
+    loadedBlobsRef.current.forEach((_, trackId) => {
+      if (!validIds.has(trackId)) {
+        loadedBlobsRef.current.delete(trackId);
+      }
+    });
+
+    // Load new/updated blobs
+    currentTracks.forEach((track) => {
+      if (!track.audioBlob) return;
+
+      const fingerprint = `${track.audioBlob.size}-${track.audioBlob.type}`;
+      const prev = loadedBlobsRef.current.get(track.id);
+
+      if (prev !== fingerprint) {
+        loadedBlobsRef.current.set(track.id, fingerprint);
+        toneEngine.loadStemFromBlob(track.id, track.name, track.audioBlob).catch(() => {
+          console.warn(`[useDAWEngine] Failed to load stem: ${track.name}`);
+        });
+      }
+
+      // Sync volume/mute
+      if (toneEngine.isReady()) {
+        const db = track.muted ? -Infinity : (track.volume / 100) * 12 - 12; // 0-100 → -12dB to 0dB
+        toneEngine.setStemVolume(track.id, db);
+        toneEngine.muteStem(track.id, track.muted);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.tracks]);
+
+  // ─── startPlayback ──────────────────────────────────────────────────────────
+
+  const startPlayback = useCallback(async (): Promise<void> => {
+    if (stateRef.current.transport.isPlaying) return;
+
+    // Ensure toneEngine is initialized (handles Tone.start() for user gesture)
+    await toneEngine.init();
+    toneEngine.setBPM(stateRef.current.transport.bpm);
+
+    // Start all loaded stems synced to transport
+    stateRef.current.tracks.forEach((track) => {
+      if (track.audioBlob && !track.muted) {
+        toneEngine.playStem(track.id);
+      }
+    });
+
+    // Start Tone.Transport
+    await toneEngine.play();
+
+    dispatch({ type: "SET_TRANSPORT", payload: { isPlaying: true } as Partial<DAWTransport> });
+
+    // Tick interval to update React state (playhead position)
+    const tickMs = (60 / stateRef.current.transport.bpm / 4) * 1000;
+    intervalRef.current = setInterval(() => {
+      const s = stateRef.current;
+      const prev = currentMeasureRef.current;
+      const newMeasure = prev + 0.25;
+
+      // Loop at totalMeasures
+      const nextMeasure = newMeasure >= s.transport.totalMeasures ? 1 : newMeasure;
+      currentMeasureRef.current = nextMeasure;
+
+      dispatch({
+        type: "SET_TRANSPORT",
+        payload: { currentMeasure: nextMeasure } as Partial<DAWTransport>,
+      });
+    }, tickMs);
+  }, [dispatch]);
+
+  // ─── stopPlayback ───────────────────────────────────────────────────────────
+
+  const stopPlayback = useCallback((): void => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
+    toneEngine.stop();
+
+    // Stop all stems
+    stateRef.current.tracks.forEach((track) => {
+      toneEngine.stopStem(track.id);
+    });
+
+    dispatch({ type: "SET_TRANSPORT", payload: { isPlaying: false, currentMeasure: 1 } as Partial<DAWTransport> });
+    currentMeasureRef.current = 1;
+  }, [dispatch]);
+
+  // ─── seekTo ─────────────────────────────────────────────────────────────────
+
+  const seekTo = useCallback((measure: number): void => {
+    const wasPlaying = stateRef.current.transport.isPlaying;
+    if (wasPlaying) stopPlayback();
+    currentMeasureRef.current = measure;
+    dispatch({ type: "SET_TRANSPORT", payload: { currentMeasure: measure } as Partial<DAWTransport> });
+    if (wasPlaying) {
+      setTimeout(() => startPlayback(), 0);
+    }
+  }, [dispatch, stopPlayback, startPlayback]);
+
+  // ─── exportToWAV (still uses OfflineAudioContext for best quality) ─────────
+
+  const exportToWAV = useCallback(async (): Promise<void> => {
+    if (typeof window === "undefined") return;
+
+    const s = stateRef.current;
+    const sampleRate = 44100;
+    const timelineDurationSeconds =
+      ((s.transport.totalMeasures * 60) / s.transport.bpm) * 4;
+
+    const offlineContext = new OfflineAudioContext(
+      2,
+      Math.ceil(sampleRate * timelineDurationSeconds),
+      sampleRate
+    );
+
+    const scheduled: { buffer: AudioBuffer; startTime: number }[] = [];
+
+    for (const block of s.blocks) {
+      const track = s.tracks.find((t) => t.id === block.trackId);
+      if (!track || !track.audioBlob || track.muted) continue;
+
+      try {
+        const audioData = await track.audioBlob.arrayBuffer();
+        const audioBuffer = await offlineContext.decodeAudioData(audioData);
+        const startSeconds = (((block.startMeasure - 1) * 60) / s.transport.bpm) * 4;
+        scheduled.push({ buffer: audioBuffer, startTime: startSeconds });
+      } catch {
+        // skip undecodable tracks
+      }
+    }
+
+    scheduled.forEach(({ buffer, startTime }) => {
+      const source = offlineContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(offlineContext.destination);
+      source.start(startTime);
+    });
+
+    try {
+      const renderedBuffer = await offlineContext.startRendering();
+      const wavBlob = encodeWAV(renderedBuffer);
+      const url = URL.createObjectURL(wavBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `wonder-export-${Date.now()}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Export failed. Please try again.");
+    }
+  }, []);
+
+  // ─── Cleanup on unmount ─────────────────────────────────────────────────────
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
+
+  return { startPlayback, stopPlayback, seekTo, exportToWAV };
+}

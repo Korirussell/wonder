@@ -4,7 +4,7 @@
  * Stores Blobs directly without base64 encoding for better performance
  */
 
-const DB_NAME = "lavoe_audio_db";
+const DB_NAME = "wonder_audio_db";
 const STORE_NAME = "audio_files";
 const DB_VERSION = 1;
 
