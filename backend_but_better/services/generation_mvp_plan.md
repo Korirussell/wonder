@@ -57,33 +57,40 @@ Recommended default:
 - it avoids premature complexity from a full agent graph
 - it keeps the API contract stable for later upgrades
 
+## What Is Implemented Now
+
+- `POST /generate-instrument` exists
+- deterministic orchestration is in `services/generation_orchestrator.py`
+- candidate reranking is in `services/sample_compare.py`
+- reuse-vs-generate policy is in `services/sample_selection.py`
+
 ## What Not To Build Yet
 
 - full multi-agent orchestration
 - layered sample generation
-- advanced comparison/reranking
 - rich vibe + math score blending
 - broader session/profile persistence
 
 ## Recommended Next Implementation Steps
 
-1. add `api/generation.py`
-2. add `services/generation_orchestrator.py`
-3. implement deterministic reuse-vs-generate logic
-4. expose `POST /generate-instrument`
-5. test from the frontend with simple prompts
+1. add the first narrow agent layer behind the same endpoint
+2. introduce an `intent_agent` that structures prompts for retrieval/generation
+3. introduce a `retrieval_agent` that wraps search + compare
+4. add prompt evaluation fixtures for threshold tuning
+5. later swap deterministic intent/retrieval logic for model-backed agents
 
 ## Extensible Follow-Up Path
 
 After the MVP works:
 
-1. add `sample_compare.py`
-2. add `sample_selection.py`
-3. upgrade deterministic orchestration into the future multi-agent flow
-4. keep the same endpoint contract while changing internals
+1. keep the same `POST /generate-instrument` contract
+2. add model-backed specialist agents one by one
+3. keep generation and persistence deterministic underneath
+4. add richer selection and layering without breaking frontend integration
 
 ## Notes
 
 - current search should be good enough for a first pass, but thresholds will need tuning
 - current indexed metadata is still simpler than a future full Gemini tagging pipeline
 - `google.generativeai` works now, but should later move to `google.genai`
+- the best migration path is to keep the endpoint stable and evolve internals from deterministic helpers into narrow agents

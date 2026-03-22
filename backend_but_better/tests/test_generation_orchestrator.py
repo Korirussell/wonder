@@ -4,16 +4,17 @@ from services.generation_orchestrator import (
     GenerateInstrumentRequest,
     GenerationOrchestrator,
 )
+from services.retrieval_agent import RetrievalResult
 from services.sample_generation import SavedGeneratedSample
 from services.sample_models import SampleRecord, SampleSearchResult
 
 
-class FakeSearchService:
+class FakeRetrievalAgent:
     def __init__(self, results: list[SampleSearchResult]) -> None:
         self.results = results
 
-    def search(self, request):
-        return self.results
+    def retrieve(self, intent, *, limit: int = 5) -> RetrievalResult:
+        return RetrievalResult(self.results[:limit])
 
 
 class FakeGenerationService:
@@ -33,23 +34,30 @@ class FakeGenerationService:
 
 
 def test_orchestrator_reuses_existing_sample_above_threshold() -> None:
-    search = FakeSearchService(
+    retrieval = FakeRetrievalAgent(
         [
             SampleSearchResult(
                 id="existing-1",
                 file_path="/tmp/existing.wav",
                 file_name="existing.wav",
                 source="local",
+                category="synth",
+                sub_category="lead",
+                tags=["warm", "analog"],
                 description="Existing match",
                 similarity_score=0.91,
+                comparison_score=0.88,
             ),
             SampleSearchResult(
                 id="existing-2",
                 file_path="/tmp/other.wav",
                 file_name="other.wav",
                 source="local",
+                category="fx",
+                tags=["other"],
                 description="Other match",
                 similarity_score=0.8,
+                comparison_score=0.51,
             ),
         ]
     )
@@ -59,7 +67,7 @@ def test_orchestrator_reuses_existing_sample_above_threshold() -> None:
             saved_path="/tmp/new.mp3",
         )
     )
-    orchestrator = GenerationOrchestrator(search, generation, reuse_threshold=0.85)
+    orchestrator = GenerationOrchestrator(retrieval, generation, reuse_threshold=0.75)
 
     result = orchestrator.generate_instrument(
         GenerateInstrumentRequest(prompt="warm lead")
@@ -68,19 +76,23 @@ def test_orchestrator_reuses_existing_sample_above_threshold() -> None:
     assert result.strategy == "existing"
     assert result.sample_id == "existing-1"
     assert len(result.alternatives) == 1
+    assert result.comparison_score is not None
     assert generation.calls == []
 
 
 def test_orchestrator_generates_when_best_result_is_below_threshold() -> None:
-    search = FakeSearchService(
+    retrieval = FakeRetrievalAgent(
         [
             SampleSearchResult(
                 id="existing-1",
                 file_path="/tmp/existing.wav",
                 file_name="existing.wav",
                 source="local",
+                category="drums",
+                tags=["weak"],
                 description="Weak match",
                 similarity_score=0.42,
+                comparison_score=0.45,
             )
         ]
     )
@@ -95,7 +107,7 @@ def test_orchestrator_generates_when_best_result_is_below_threshold() -> None:
         saved_path="/tmp/generated.mp3",
     )
     generation = FakeGenerationService(saved)
-    orchestrator = GenerationOrchestrator(search, generation, reuse_threshold=0.85)
+    orchestrator = GenerationOrchestrator(retrieval, generation, reuse_threshold=0.85)
 
     result = orchestrator.generate_instrument(
         GenerateInstrumentRequest(prompt="noisy riser", duration_seconds=1.4)
@@ -105,4 +117,5 @@ def test_orchestrator_generates_when_best_result_is_below_threshold() -> None:
     assert result.sample_id == "generated-1"
     assert result.audio_url == "/samples/generated-1/audio"
     assert result.alternatives[0].id == "existing-1"
+    assert result.comparison_score is not None
     assert generation.calls == [("noisy riser", 1.4, None)]

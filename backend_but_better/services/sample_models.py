@@ -4,7 +4,7 @@ import hashlib
 import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -79,6 +79,7 @@ class SampleSearchResult(BaseModel):
     description: str | None = None
     duration: float | None = None
     similarity_score: float
+    comparison_score: float | None = None
 
 
 def normalize_vector(value: object, vector_dim: int) -> list[float]:
@@ -91,8 +92,8 @@ def normalize_vector(value: object, vector_dim: int) -> list[float]:
     elif isinstance(value, tuple):
         vector = [float(item) for item in value]
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        numeric_items = cast(Sequence[object], value)
-        vector = [float(item) for item in numeric_items]
+        numeric_items = cast(Sequence[Any], value)
+        vector = [float(cast(Any, item)) for item in numeric_items]
     else:
         raise TypeError("vector value must be a sequence of numbers or None")
     if len(vector) > vector_dim:

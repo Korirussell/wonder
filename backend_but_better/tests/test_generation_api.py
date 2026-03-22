@@ -35,6 +35,7 @@ def test_generate_instrument_returns_existing_sample() -> None:
             description="Warm analog synth lead",
             source="local",
             similarity_score=0.84,
+            comparison_score=0.87,
             alternatives=[
                 SampleSearchResult(
                     id="sample-2",
@@ -75,6 +76,7 @@ def test_generate_instrument_returns_generated_sample() -> None:
             description="Generated from prompt: Dark noisy riser",
             source="elevenlabs",
             similarity_score=None,
+            comparison_score=0.44,
             alternatives=[],
         )
     )

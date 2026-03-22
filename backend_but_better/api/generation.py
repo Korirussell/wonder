@@ -9,6 +9,7 @@ from services.generation_orchestrator import (
     GenerateInstrumentResponse,
     GenerationOrchestrator,
 )
+from services.retrieval_agent import RetrievalAgent
 from services.sample_generation import SampleGenerationService
 from services.sample_search import SampleSearchService
 
@@ -17,10 +18,21 @@ router = APIRouter(tags=["generation"])
 
 
 class GenerateInstrumentBody(BaseModel):
-    prompt: str
-    duration_seconds: float = Field(default=2.0, ge=0.5, le=5.0)
-    output_format: str | None = None
-    search_limit: int = Field(default=5, ge=1, le=10)
+    prompt: str = Field(
+        description="Natural-language description of the requested sound"
+    )
+    duration_seconds: float = Field(
+        default=2.0, ge=0.5, le=5.0, description="Optional target duration in seconds"
+    )
+    output_format: str | None = Field(
+        default=None, description="Optional generation provider output format override"
+    )
+    search_limit: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Number of indexed candidates to inspect before generating",
+    )
 
 
 class GenerateInstrumentResult(BaseModel):
@@ -31,6 +43,7 @@ class GenerateInstrumentResult(BaseModel):
     description: str | None = None
     source: str
     similarity_score: float | None = None
+    comparison_score: float | None = None
     alternatives: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -40,16 +53,27 @@ def get_sample_generation_service(
     return SampleGenerationService(database=database)
 
 
-def get_generation_orchestrator(
+def get_retrieval_agent(
     search_service: SampleSearchService = Depends(get_sample_search_service),
+) -> RetrievalAgent:
+    return RetrievalAgent(search_service)
+
+
+def get_generation_orchestrator(
+    retrieval_agent: RetrievalAgent = Depends(get_retrieval_agent),
     generation_service: SampleGenerationService = Depends(
         get_sample_generation_service
     ),
 ) -> GenerationOrchestrator:
-    return GenerationOrchestrator(search_service, generation_service)
+    return GenerationOrchestrator(retrieval_agent, generation_service)
 
 
-@router.post("/generate-instrument", response_model=GenerateInstrumentResult)
+@router.post(
+    "/generate-instrument",
+    response_model=GenerateInstrumentResult,
+    summary="Find or generate an instrument sample",
+    description="Searches indexed samples first, then falls back to ElevenLabs generation if confidence is too low.",
+)
 def generate_instrument(
     body: GenerateInstrumentBody,
     orchestrator: GenerationOrchestrator = Depends(get_generation_orchestrator),
@@ -70,6 +94,7 @@ def generate_instrument(
         description=result.description,
         source=result.source,
         similarity_score=result.similarity_score,
+        comparison_score=result.comparison_score,
         alternatives=[
             candidate.model_dump(mode="python") for candidate in result.alternatives
         ],

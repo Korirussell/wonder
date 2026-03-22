@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 
-from services.sample_generation import SampleGenerationService
-from services.sample_models import SampleSearchRequest, SampleSearchResult
-from services.sample_search import SampleSearchService
+from services.intent_agent import IntentAgent
+from services.retrieval_agent import RetrievalResult
+from services.sample_generation import SampleGenerationService, SavedGeneratedSample
+from services.sample_models import SampleSearchResult
+from services.sample_selection import SampleSelectionService
 
 
 class SampleGenerator(Protocol):
@@ -16,7 +17,11 @@ class SampleGenerator(Protocol):
         *,
         duration_seconds: float = 2.0,
         output_format: str | None = None,
-    ): ...
+    ) -> SavedGeneratedSample: ...
+
+
+class RetrievalExecutor(Protocol):
+    def retrieve(self, intent, *, limit: int = 5) -> RetrievalResult: ...
 
 
 @dataclass(slots=True)
@@ -36,31 +41,37 @@ class GenerateInstrumentResponse:
     description: str | None
     source: str
     similarity_score: float | None
+    comparison_score: float | None
     alternatives: list[SampleSearchResult]
 
 
 class GenerationOrchestrator:
     def __init__(
         self,
-        search_service: SampleSearchService,
+        retrieval_agent: RetrievalExecutor,
         generation_service: SampleGenerator,
+        intent_agent: IntentAgent | None = None,
+        selection_service: SampleSelectionService | None = None,
         reuse_threshold: float | None = None,
     ) -> None:
-        self.search_service = search_service
+        self.intent_agent = intent_agent or IntentAgent()
+        self.retrieval_agent = retrieval_agent
         self.generation_service = generation_service
-        self.reuse_threshold = reuse_threshold or float(
-            os.getenv("SAMPLE_REUSE_THRESHOLD", "0.72")
+        self.selection_service = selection_service or SampleSelectionService(
+            reuse_threshold=reuse_threshold
         )
 
     def generate_instrument(
         self,
         request: GenerateInstrumentRequest,
     ) -> GenerateInstrumentResponse:
-        query = SampleSearchRequest(query=request.prompt, limit=request.search_limit)
-        candidates = self.search_service.search(query)
-        best = candidates[0] if candidates else None
+        intent = self.intent_agent.analyze(request.prompt)
+        retrieval = self.retrieval_agent.retrieve(intent, limit=request.search_limit)
+        candidates = retrieval.candidates
+        decision = self.selection_service.choose_strategy(candidates)
+        best = decision.selected
 
-        if best and best.similarity_score >= self.reuse_threshold:
+        if decision.strategy == "existing" and best is not None:
             return GenerateInstrumentResponse(
                 strategy="existing",
                 sample_id=best.id,
@@ -69,21 +80,24 @@ class GenerationOrchestrator:
                 description=best.description,
                 source=best.source,
                 similarity_score=best.similarity_score,
-                alternatives=candidates[1:],
+                comparison_score=best.comparison_score,
+                alternatives=decision.alternatives,
             )
 
         saved = self.generation_service.generate_and_save(
-            request.prompt,
-            duration_seconds=request.duration_seconds,
+            intent.normalized_prompt,
+            duration_seconds=intent.duration_seconds or request.duration_seconds,
             output_format=request.output_format,
         )
+        saved_record = cast(SavedGeneratedSample, saved).record
         return GenerateInstrumentResponse(
             strategy="generated",
-            sample_id=saved.record.id or "",
-            audio_url=f"/samples/{saved.record.id}/audio",
-            file_name=saved.record.file_name,
-            description=saved.record.description,
-            source=saved.record.source,
+            sample_id=saved_record.id or "",
+            audio_url=f"/samples/{saved_record.id}/audio",
+            file_name=saved_record.file_name,
+            description=saved_record.description,
+            source=saved_record.source,
             similarity_score=None,
-            alternatives=candidates,
+            comparison_score=decision.confidence_score,
+            alternatives=decision.alternatives,
         )
