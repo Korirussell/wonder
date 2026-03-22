@@ -1,17 +1,18 @@
 """
 Stem separator sub-agent: splits audio into stems and loads them into Ableton.
 
-Runs Demucs via the REST server — typically 30–60 seconds on CPU.
+Calls server._handlers.handle_split directly (same process — no HTTP).
+Runs Demucs — typically 30–60 seconds on CPU.
 """
 from __future__ import annotations
 
-import os
+import asyncio
+from pathlib import Path
 from typing import Any
-
-import httpx
 
 from google.adk.agents import Agent
 
+from ..logging_config import get_logger
 from ..tools.ableton import (
     create_audio_track,
     get_session_info,
@@ -20,7 +21,7 @@ from ..tools.ableton import (
     set_track_name,
 )
 
-PYTHON_API_URL = os.getenv("PYTHON_API_URL", "http://localhost:8000")
+logger = get_logger("wonder.stem_separator")
 
 
 async def split_audio(
@@ -43,26 +44,34 @@ async def split_audio(
         beat_grid: Whether to extract beat grid / downbeats.
         key: Whether to detect musical key.
     """
-    try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            with open(file_path, "rb") as f:
-                resp = await client.post(
-                    f"{PYTHON_API_URL}/split",
-                    files={"file": f},
-                    data={
-                        "stems": str(stems).lower(),
-                        "midi": str(midi).lower(),
-                        "beat_grid": str(beat_grid).lower(),
-                        "key": str(key).lower(),
-                    },
-                )
-            resp.raise_for_status()
-            return resp.json()
-    except FileNotFoundError:
+    p = Path(file_path)
+    if not p.exists():
         return {"error": f"File not found: {file_path}", "success": False}
-    except httpx.HTTPStatusError as exc:
-        return {"error": f"HTTP {exc.response.status_code}: {exc.response.text}", "success": False}
+
+    logger.info("split_audio  %s  stems=%s  midi=%s", p.name, stems, midi)
+    try:
+        from server._handlers import handle_split
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: handle_split(
+                p,
+                stems=stems,
+                midi=midi,
+                beat_grid=beat_grid,
+                key=key,
+            ),
+        )
+        logger.info(
+            "split_audio done  bpm=%s  key=%s  stems=%s",
+            result.get("bpm"),
+            result.get("key"),
+            list(result.get("stem_paths", {}).keys()),
+        )
+        return result
     except Exception as exc:
+        logger.error("split_audio failed: %s", exc, exc_info=True)
         return {"error": str(exc), "success": False}
 
 

@@ -42,6 +42,13 @@ try:
 except ImportError:
     _analytics_tools = []
 
+# Sample library tools (MongoDB-backed)
+try:
+    from .tools.samples import list_user_samples, save_sample
+    _sample_tools = [list_user_samples, save_sample]
+except ImportError:
+    _sample_tools = []
+
 # Sub-agents
 try:
     from .agents import composition_agent, sound_design_agent, stem_separator_agent
@@ -63,6 +70,7 @@ root_agent = Agent(
         *_audio_tools,
         *_soundgen_tools,
         *_analytics_tools,
+        *_sample_tools,
         *_sub_agent_tools,
     ],
 )

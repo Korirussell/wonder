@@ -9,6 +9,7 @@ Falls back to in-memory if MongoDB is unavailable or motor is not installed.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -53,6 +54,33 @@ def _doc_to_session(doc: dict[str, Any]) -> Session:
         state=doc.get("state", {}),
         events=doc.get("events", []),
     )
+
+
+def _emit_session_analytics(doc: dict[str, Any]) -> None:
+    """
+    Fire-and-forget: convert session doc into analytics rows and ship to Snowflake.
+    Uses server.mongo.snowflake_events for row extraction, then inserts each row.
+    """
+    try:
+        from server.mongo.snowflake_events import session_document_to_analytics_events
+        from ..analytics.snowflake_client import insert_event
+
+        rows = session_document_to_analytics_events(doc)
+        if not rows:
+            return
+
+        loop: asyncio.AbstractEventLoop | None = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
+        for row in rows:
+            if loop is not None and loop.is_running():
+                asyncio.ensure_future(insert_event(row))
+            # If no running loop, skip — analytics are non-critical
+    except Exception as exc:
+        logger.debug("_emit_session_analytics failed silently: %s", exc)
 
 
 class MongoSessionService(BaseSessionService):
@@ -143,11 +171,13 @@ class MongoSessionService(BaseSessionService):
         if self._collection is not None:
             try:
                 await self._collection.replace_one({"_id": session_id}, doc, upsert=True)
+                _emit_session_analytics(doc)
                 return
             except Exception as exc:
                 logger.warning("update_session MongoDB error, falling back: %s", exc)
 
         self._fallback[key] = doc
+        _emit_session_analytics(doc)
 
     async def delete_session(
         self,

@@ -76,34 +76,14 @@ async def load_midi_notes(midi_id: str) -> dict[str, Any]:
     """
     logger.info("load_midi_notes  midi_id=%s", midi_id)
     try:
-        import pretty_midi
-        from server.utils.audio_to_midi import get_midi_file_path
+        from server.utils.audio_to_midi import get_midi_file_path, parse_midi_file_to_notes
 
         midi_path = get_midi_file_path(midi_id)
         if not midi_path:
             return {"error": f"MIDI not found: {midi_id}", "success": False}
 
         loop = asyncio.get_running_loop()
-
-        def _parse() -> dict[str, Any]:
-            pm = pretty_midi.PrettyMIDI(midi_path)
-            _, tempos = pm.get_tempo_change_times()
-            bpm = float(tempos[0]) if len(tempos) > 0 else 120.0
-            bps = bpm / 60.0
-            notes = [
-                {
-                    "pitch": n.pitch,
-                    "start_time": round(n.start * bps, 4),
-                    "duration": round((n.end - n.start) * bps, 4),
-                    "velocity": n.velocity,
-                    "mute": False,
-                }
-                for inst in pm.instruments
-                for n in inst.notes
-            ]
-            return {"success": True, "midi_id": midi_id, "notes": notes, "note_count": len(notes), "tempo_bpm": bpm}
-
-        result = await loop.run_in_executor(None, _parse)
+        result = await loop.run_in_executor(None, lambda: parse_midi_file_to_notes(midi_path))
         logger.info("load_midi_notes done  notes=%s", result.get("note_count", "?"))
         return result
     except Exception as exc:

@@ -369,6 +369,41 @@ def save_notes_to_midi(
     }
 
 
+def parse_midi_file_to_notes(midi_path: str) -> Dict[str, Any]:
+    """
+    Parse a saved MIDI file and return notes in Wonder format.
+
+    Returns {success, midi_id, notes, note_count, tempo_bpm}.
+    Notes format: [{pitch, start_time, duration, velocity, mute}] where
+    start_time and duration are in beats.
+    """
+    import pretty_midi
+
+    pm = pretty_midi.PrettyMIDI(midi_path)
+    _, tempos = pm.get_tempo_change_times()
+    tempo_bpm = float(tempos[0]) if len(tempos) > 0 else 120.0
+    bps = tempo_bpm / 60.0
+    notes = [
+        {
+            "pitch": n.pitch,
+            "start_time": round(n.start * bps, 4),
+            "duration": round((n.end - n.start) * bps, 4),
+            "velocity": n.velocity,
+            "mute": False,
+        }
+        for inst in pm.instruments
+        for n in inst.notes
+    ]
+    midi_id = Path(midi_path).stem
+    return {
+        "success": True,
+        "midi_id": midi_id,
+        "notes": notes,
+        "note_count": len(notes),
+        "tempo_bpm": tempo_bpm,
+    }
+
+
 def get_midi_file_path(midi_id: str) -> str:
     """Get the path to a saved MIDI file by ID"""
     storage_dir = _ensure_midi_storage()
