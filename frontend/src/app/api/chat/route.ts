@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI, FunctionCallingMode, type Content } from "@google/generative-ai";
 import { NextRequest, NextResponse } from "next/server";
 import { sendAbletonCommand } from "@/lib/ableton";
+import { generateSoundEffect, textToSpeech } from "@/lib/elevenlabs";
 import { WONDER_TOOL_DECLARATIONS } from "@/lib/wonderTools";
 import { buildSystemPromptWithKnowledge } from "@/lib/wonderKnowledge";
 import {
@@ -127,7 +128,13 @@ Minor: 0,2,3,5,7,8,10 | Pentatonic minor: 0,3,5,7,10 | Major: 0,2,4,5,7,9,11
 
 ## Finding instruments
 - To find a specific preset: call search_browser with the name, then use the returned URI in load_instrument_or_effect
-- Example: search_browser("Wavetable") → get URI → load_instrument_or_effect(track_index, uri)`;
+- Example: search_browser("Wavetable") → get URI → load_instrument_or_effect(track_index, uri)
+
+## ElevenLabs sound generation
+- To generate a sound effect: call generate_sound_effect(description, duration_seconds) — e.g. generate_sound_effect("deep crowd roar", 3.0)
+- To generate speech: call text_to_speech(text) — e.g. text_to_speech("Yeah, let's go")
+- Both save an MP3 to the Ableton User Library and return a file_path and ableton_uri
+- The ableton_uri can be used with load_instrument_or_effect to drop the audio onto a track`;
 
 const MAX_TOOL_ROUNDS = 30;
 
@@ -309,9 +316,29 @@ export async function POST(req: NextRequest) {
           try {
             let result: unknown;
 
+            const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
+
             if (call.name === "load_drum_kit") {
               // Composite command — multi-step execution
               result = await executeLoadDrumKit(args);
+            } else if (call.name === "generate_sound_effect") {
+              if (!elevenLabsKey) {
+                throw new Error("ELEVENLABS_API_KEY is not set. Add it to .env.local to use sound generation.");
+              }
+              result = await generateSoundEffect(
+                args.description as string,
+                (args.duration_seconds as number | undefined) ?? 2.0,
+                elevenLabsKey
+              );
+            } else if (call.name === "text_to_speech") {
+              if (!elevenLabsKey) {
+                throw new Error("ELEVENLABS_API_KEY is not set. Add it to .env.local to use text-to-speech.");
+              }
+              result = await textToSpeech(
+                args.text as string,
+                elevenLabsKey,
+                args.voice_id as string | undefined
+              );
             } else {
               // Translate tool name → Ableton command name and args
               const cmdName = TOOL_TO_COMMAND[call.name] ?? call.name;
@@ -427,6 +454,12 @@ function getHint(toolName: string, error: string): string {
   }
   if (toolName === "search_browser") {
     return "Provide a simpler query string (e.g. 'Wavetable' instead of a full path). Optionally specify category.";
+  }
+  if (toolName === "generate_sound_effect") {
+    return "Make sure ELEVENLABS_API_KEY is set in .env.local. Duration must be between 0.5 and 5 seconds.";
+  }
+  if (toolName === "text_to_speech") {
+    return "Make sure ELEVENLABS_API_KEY is set in .env.local. Provide a voice_id or omit to use the default.";
   }
   return "Read the error and retry with corrected parameters.";
 }

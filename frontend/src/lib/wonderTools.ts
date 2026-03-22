@@ -214,6 +214,32 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
     },
   },
 
+  // ─── ElevenLabs Audio Generation ──────────────────────────────────────────────
+  {
+    name: "generate_sound_effect",
+    description: "Generate a sound effect audio file from a text description using ElevenLabs. The file is saved directly to the Ableton User Library. Use the returned ableton_uri to load it onto a track with load_instrument_or_effect.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        description: { type: SchemaType.STRING, description: "Describe the sound effect (e.g. 'deep cinematic explosion', 'crowd roar', 'rain on glass')" },
+        duration_seconds: { type: SchemaType.NUMBER, description: "Duration in seconds (0.5–5.0, default 2.0)" },
+      },
+      required: ["description"],
+    },
+  },
+  {
+    name: "text_to_speech",
+    description: "Convert text to spoken audio using ElevenLabs and save to the Ableton User Library. Useful for vocal chops, spoken word, or ad-libs.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        text: { type: SchemaType.STRING, description: "The text to speak" },
+        voice_id: { type: SchemaType.STRING, description: "Optional ElevenLabs voice ID. Omit to use the default voice." },
+      },
+      required: ["text"],
+    },
+  },
+
   // ─── Browser Search ────────────────────────────────────────────────────────
   {
     name: "search_browser",
