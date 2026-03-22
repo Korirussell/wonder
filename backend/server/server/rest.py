@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -47,6 +47,111 @@ app.mount("/files", StaticFiles(directory=str(OUTPUT_ROOT)), name="files")
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/mongo")
+def health_mongo() -> dict[str, object]:
+    """MongoDB Atlas connectivity (optional — see server/mongo/README.md)."""
+    from .mongo import mongo_health
+
+    return mongo_health()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _doc(d: dict | None) -> dict:
+    """Strip the non-serialisable MongoDB ``_id`` field from a document."""
+    if d is None:
+        return {}
+    d.pop("_id", None)
+    return d
+
+
+def _repo():
+    """Return the shared repository or raise 503 if MongoDB is not configured."""
+    from .mongo import get_repository
+    r = get_repository()
+    if r is None:
+        raise HTTPException(status_code=503, detail="MongoDB not configured (set MONGODB_URI or MONGO_URI)")
+    return r
+
+
+# ---------------------------------------------------------------------------
+# /users
+# ---------------------------------------------------------------------------
+
+from .mongo.models import UserUpsert  # noqa: E402
+
+
+@app.post("/users", status_code=201)
+def upsert_user(payload: UserUpsert) -> dict:
+    """Create or update a user by auth_subject."""
+    return _doc(_repo().upsert_user(payload))
+
+
+@app.get("/users/{auth_subject}")
+def get_user(auth_subject: str) -> dict:
+    """Fetch a user by their auth provider subject."""
+    user = _repo().get_user_by_auth_subject(auth_subject)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User not found: {auth_subject}")
+    return _doc(user)
+
+
+# ---------------------------------------------------------------------------
+# /samples
+# ---------------------------------------------------------------------------
+
+from .mongo.models import SampleUpsert  # noqa: E402
+
+
+@app.post("/samples", status_code=201)
+def upsert_sample(payload: SampleUpsert) -> dict:
+    """Index or update a sample for a user."""
+    return _doc(_repo().upsert_sample(payload))
+
+
+@app.get("/samples")
+def list_samples(
+    user_id: str = Query(..., description="User ID to list samples for"),
+    limit: int = Query(100, ge=1, le=1000),
+    skip: int = Query(0, ge=0),
+) -> list[dict]:
+    """List samples for a user, newest first."""
+    return [_doc(s) for s in _repo().list_samples_for_user(user_id, limit=limit, skip=skip)]
+
+
+# ---------------------------------------------------------------------------
+# /sessions
+# ---------------------------------------------------------------------------
+
+from .mongo.models import SessionAppendTurn, SessionCreate  # noqa: E402
+
+
+@app.post("/sessions", status_code=201)
+def create_session(payload: SessionCreate) -> dict:
+    """Create a new copilot session (idempotent by session_id)."""
+    return _doc(_repo().create_session(payload))
+
+
+@app.get("/sessions/{session_id}")
+def get_session(session_id: str) -> dict:
+    """Fetch a session by its ID."""
+    session = _repo().get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return _doc(session)
+
+
+@app.post("/sessions/{session_id}/turns")
+def append_turn(session_id: str, body: SessionAppendTurn) -> dict:
+    """Append a turn to an existing session."""
+    result = _repo().append_session_turn(session_id, body)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return _doc(result)
 
 
 # ---------------------------------------------------------------------------
