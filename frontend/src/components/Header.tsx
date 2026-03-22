@@ -1,15 +1,46 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { X, Settings, User, ChevronDown, Cpu, Sparkles } from "lucide-react";
+import * as Tone from "tone";
+import { X, Settings, User, ChevronDown, Cpu, Sparkles, Guitar } from "lucide-react";
 import WonderProfileModal from "./WonderProfileModal";
+import SolanaBlinkModal from "./SolanaBlinkModal";
+import AmpRack from "./AmpRack";
 import { useDAWContext } from "@/lib/DAWContext";
+import { toneEngine } from "@/lib/toneEngine";
 
 // ─── Audio Engine Settings Modal ─────────────────────────────────────────────
 
 function AudioEngineModal({ onClose }: { onClose: () => void }) {
   const [bufferSize, setBufferSize] = useState("256");
   const [inputDevice, setInputDevice] = useState("Built-in Microphone");
+  const [audioStats, setAudioStats] = useState({
+    sampleRate: "—",
+    latency: "—",
+  });
+
+  // Read real values from WebAudio context on open
+  useEffect(() => {
+    try {
+      const ctx = Tone.getContext().rawContext as AudioContext;
+      const sampleRate = ctx.sampleRate;
+      const latencyMs = ((ctx.baseLatency ?? 0) * 1000).toFixed(1);
+      const bufSamples = Math.round((ctx.baseLatency ?? 0) * sampleRate) || 256;
+      // Snap buffer size selector to nearest real value
+      const snapped = [128, 256, 512, 1024, 2048].reduce((prev, cur) =>
+        Math.abs(cur - bufSamples) < Math.abs(prev - bufSamples) ? cur : prev
+      );
+      requestAnimationFrame(() => {
+        setAudioStats({
+          sampleRate: `${(sampleRate / 1000).toFixed(sampleRate % 1000 === 0 ? 0 : 1)} kHz`,
+          latency: `${latencyMs} ms`,
+        });
+        setBufferSize(String(snapped));
+      });
+    } catch {
+      // AudioContext not yet started — leave defaults
+    }
+  }, []);
 
   return (
     <div
@@ -44,10 +75,10 @@ function AudioEngineModal({ onClose }: { onClose: () => void }) {
           {/* Readout grid */}
           <div className="grid grid-cols-2 gap-2.5">
             {[
-              { label: "BUFFER SIZE",  value: `${bufferSize} samples` },
-              { label: "SAMPLE RATE",  value: "48 000 Hz"             },
-              { label: "LATENCY",      value: "5.3 ms"                },
-              { label: "BIT DEPTH",    value: "32-bit float"          },
+              { label: "BUFFER SIZE",  value: `${bufferSize} samples`  },
+              { label: "SAMPLE RATE",  value: audioStats.sampleRate     },
+              { label: "LATENCY",      value: audioStats.latency        },
+              { label: "BIT DEPTH",    value: "32-bit float"            },
             ].map(({ label, value }) => (
               <div
                 key={label}
@@ -210,12 +241,60 @@ export default function Header() {
   const [openMenu, setOpenMenu]       = useState<OpenMenu>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileOpen, setProfileOpen]   = useState(false);
+  const [blinkOpen, setBlinkOpen]       = useState(false);
+  const [ampOpen,   setAmpOpen]         = useState(false);
   const [toast, setToast]               = useState<string | null>(null);
   const [v2Tooltip, setV2Tooltip]       = useState<"mastering" | "stems" | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const { state } = useDAWContext();
   const session = { bpm: state.transport.bpm, key: "F Minor" };
+  const navRef = useRef<HTMLElement>(null);
+  const lastTransientRef = useRef(0);
+  const rafRef = useRef(0);
+
+  // Transient detection — bounces header + rumbles screen only on loud audio peaks
+  useEffect(() => {
+    const THRESHOLD = 0.65; // peak amplitude required to trigger (0–1)
+    const COOLDOWN_MS = 380; // min ms between triggers
+
+    function tick() {
+      rafRef.current = requestAnimationFrame(tick);
+      if (!toneEngine.isReady()) return;
+
+      const waveform = toneEngine.getWaveformValues();
+      let peak = 0;
+      for (let i = 0; i < waveform.length; i++) {
+        const v = Math.abs(waveform[i]);
+        if (v > peak) peak = v;
+      }
+
+      if (peak > THRESHOLD && Date.now() - lastTransientRef.current > COOLDOWN_MS) {
+        lastTransientRef.current = Date.now();
+
+        // Header bounce
+        const nav = navRef.current;
+        if (nav) {
+          nav.classList.remove("wonder-transient-bounce");
+          void nav.offsetWidth; // force reflow to restart animation
+          nav.classList.add("wonder-transient-bounce");
+        }
+
+        // Full-screen rumble
+        document.documentElement.classList.remove("wonder-screen-rumble");
+        void document.documentElement.offsetWidth;
+        document.documentElement.classList.add("wonder-screen-rumble");
+      }
+    }
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      // Clean up any lingering animation classes on unmount
+      navRef.current?.classList.remove("wonder-transient-bounce");
+      document.documentElement.classList.remove("wonder-screen-rumble");
+    };
+  }, []);
 
   const showToast = (msg: string) => { setToast(null); setTimeout(() => setToast(msg), 10); };
 
@@ -232,7 +311,7 @@ export default function Header() {
   // Close dropdown on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setOpenMenu(null); setSettingsOpen(false); setProfileOpen(false); }
+      if (e.key === "Escape") { setOpenMenu(null); setSettingsOpen(false); setProfileOpen(false); setBlinkOpen(false); setAmpOpen(false); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -272,6 +351,11 @@ export default function Header() {
       label: "Export to Pro Tools (.ptx)",
       action: () => triggerExport("Pro Tools"),
     },
+    {
+      label: "⬡  Export as Solana Blink…",
+      divider: true,
+      action: () => { setOpenMenu(null); setBlinkOpen(true); },
+    },
   ];
 
   const agentItems: MenuItem[] = [
@@ -288,11 +372,16 @@ export default function Header() {
 
   return (
     <>
-      <nav className="flex-shrink-0 flex items-center px-5 h-[44px] bg-[#FDFDFB] border-b border-[#D8D8D2] z-20 relative gap-3">
-        {/* Logo */}
-        <span className="text-[17px] font-black text-[#1A1A1A] italic font-headline tracking-tighter mr-2 select-none">
-          Wonder
-        </span>
+      <nav
+        ref={navRef}
+        className="flex-shrink-0 flex items-center px-5 h-[44px] bg-[#FDFDFB] border-b-2 border-[#1A1A1A] z-[60] relative gap-3 origin-top will-change-transform"
+      >
+        {/* Centered WONDER wordmark */}
+        <div className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 pointer-events-none select-none">
+          <span className="font-black uppercase tracking-widest text-[#1A1A1A]" style={{ fontFamily: "system-ui, Impact, 'Arial Black', sans-serif", fontSize: 22, letterSpacing: 4 }}>
+            WONDER
+          </span>
+        </div>
 
         {/* Nav items */}
         <div ref={menuRef} className="flex items-center gap-0.5">
@@ -301,7 +390,7 @@ export default function Header() {
           <div className="relative">
             <button
               onClick={() => setOpenMenu(openMenu === "file" ? null : "file")}
-              className={`flex items-center gap-1 px-3 py-1 text-[12px] rounded transition-colors font-mono font-bold uppercase tracking-wide ${
+              className={`flex items-center gap-1 px-3 py-1 text-[12px] rounded-sm transition-colors font-mono font-bold uppercase tracking-wide ${
                 openMenu === "file"
                   ? "bg-[#1A1A1A] text-white"
                   : "text-[#1A1A1A]/50 hover:text-[#1A1A1A] hover:bg-[#F0F0EB]"
@@ -321,7 +410,7 @@ export default function Header() {
           <div className="relative">
             <button
               onClick={() => setOpenMenu(openMenu === "agent" ? null : "agent")}
-              className={`flex items-center gap-1.5 px-3 py-1 text-[12px] rounded transition-colors font-mono font-bold uppercase tracking-wide ${
+              className={`flex items-center gap-1.5 px-3 py-1 text-[12px] rounded-sm transition-colors font-mono font-bold uppercase tracking-wide ${
                 openMenu === "agent"
                   ? "bg-[#1A1A1A] text-white"
                   : "text-[#1A1A1A]/50 hover:text-[#1A1A1A] hover:bg-[#F0F0EB]"
@@ -363,7 +452,7 @@ export default function Header() {
         <div className="flex-1" />
 
         {/* BPM / KEY / TIME readout */}
-        <div className="flex border border-[#D8D8D2] rounded overflow-hidden">
+	        <div className="flex border-2 border-[#1A1A1A] rounded-sm overflow-hidden shadow-[3px_3px_0px_0px_rgba(26,26,26,1)]">
           <div className="flex flex-col items-center justify-center px-4 py-1 border-r border-[#D8D8D2] bg-[#FAFAF6]">
             <span className="text-[7.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[2px]">BPM</span>
             <span className="text-[13px] font-bold font-mono text-[#1a1a1a] leading-none tabular-nums">
@@ -380,21 +469,34 @@ export default function Header() {
           </div>
         </div>
 
+        {/* Amp Rack */}
+          <button
+            onClick={() => setAmpOpen(true)}
+            className={`w-[32px] h-[32px] rounded-sm border-2 border-[#1A1A1A] flex items-center justify-center transition-colors shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] ${
+              ampOpen
+                ? "bg-[#1A1A1A] text-white"
+                : "bg-[#FDFDFB] text-[#1A1A1A]/40 hover:bg-[#F0F0EB] hover:text-[#1A1A1A]"
+            }`}
+            title="Guitar Amp"
+          >
+            <Guitar size={14} strokeWidth={1.5} />
+          </button>
+
         {/* Settings */}
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="w-[32px] h-[32px] rounded-full border border-[#D8D8D2] flex items-center justify-center hover:bg-[#F0F0EB] transition-colors text-[#1A1A1A]/40 hover:text-[#1A1A1A]"
-          title="Audio engine settings"
-        >
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="w-[32px] h-[32px] rounded-sm border-2 border-[#1A1A1A] flex items-center justify-center hover:bg-[#F0F0EB] transition-colors text-[#1A1A1A]/40 hover:text-[#1A1A1A] bg-[#FDFDFB] shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
+            title="Audio engine settings"
+          >
           <Settings size={14} strokeWidth={1.5} />
         </button>
 
         {/* Profile */}
-        <button
-          onClick={() => setProfileOpen(true)}
-          className="w-[32px] h-[32px] rounded-full bg-[#1A1A1A] flex items-center justify-center hover:bg-[#333] transition-colors border-2 border-[#1A1A1A]"
-          title=".wonderprofile"
-        >
+          <button
+            onClick={() => setProfileOpen(true)}
+            className="w-[32px] h-[32px] rounded-sm bg-[#1A1A1A] flex items-center justify-center hover:bg-[#333] transition-colors border-2 border-[#1A1A1A] shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
+            title=".wonderprofile"
+          >
           <User size={13} strokeWidth={1.5} color="white" />
         </button>
       </nav>
@@ -402,6 +504,8 @@ export default function Header() {
       {/* Modals */}
       {settingsOpen && <AudioEngineModal onClose={() => setSettingsOpen(false)} />}
       {profileOpen  && <WonderProfileModal onClose={() => setProfileOpen(false)} />}
+      {blinkOpen    && <SolanaBlinkModal onClose={() => setBlinkOpen(false)} />}
+      {ampOpen      && <AmpRack onClose={() => setAmpOpen(false)} />}
 
       {/* Toast */}
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}

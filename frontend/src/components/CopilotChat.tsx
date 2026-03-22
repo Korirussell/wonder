@@ -10,6 +10,7 @@ import { toneEngine, type DrumSlot } from "@/lib/toneEngine";
 import { searchSamples } from "@/lib/sampleSearch";
 import ListeningAnalysis from "@/components/ListeningAnalysis";
 import type { AudioAttachment } from "@/types";
+import { dbToVolumePercent } from "@/lib/mixUtils";
 
 // ─── Generated sounds panel ───────────────────────────────────────────────────
 
@@ -29,6 +30,7 @@ function GeneratedSoundCard({ sound }: { sound: GeneratedSound }) {
     const player = new Tone.Player({
       url: sound.audioUrl,
       autostart: false,
+      loop: false,
       onload: () => setReady(true),
     }).toDestination();
     playerRef.current = player;
@@ -104,6 +106,28 @@ function analyzeTaps(notes: TapNote[]) {
     capture_ms: Math.max(sorted[sorted.length-1].startMs+sorted[sorted.length-1].durationMs, 1),
   };
 }
+
+function getAgenticMixSuggestion(trackName: string, index: number) {
+  const name = trackName.toLowerCase();
+
+  if (/kick|snare|drum|perc|808|bass/.test(name)) {
+    return { volumeDb: -4, pan: 0 };
+  }
+  if (/vocal|lead|voice/.test(name)) {
+    return { volumeDb: -6, pan: 0 };
+  }
+  if (/guitar|string|rhodes|piano|keys|synth|pad|chord/.test(name)) {
+    const side = index % 2 === 0 ? -0.45 : 0.45;
+    return { volumeDb: -9, pan: side };
+  }
+  if (/texture|fx|ambience|atmo|noise/.test(name)) {
+    const side = index % 2 === 0 ? -0.25 : 0.25;
+    return { volumeDb: -12, pan: side };
+  }
+
+  const side = index % 2 === 0 ? -0.12 : 0.12;
+  return { volumeDb: -8.5, pan: side };
+}
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function CopilotChat() {
@@ -121,6 +145,10 @@ export default function CopilotChat() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
+
+  // ── Agentic workflow state ──────────────────────────────────────────────────
+  const [isAgenticRunning, setIsAgenticRunning] = useState(false);
+  const [agenticStep, setAgenticStep] = useState(0);
 
   // Tap rhythm
   const [isTapRecording, setIsTapRecording] = useState(false);
@@ -446,13 +474,25 @@ export default function CopilotChat() {
   });
 
   const isLoading = status === "streaming" || status === "submitted";
+  const isAiAuraActive = isGeneratingAudio || isLoading || isAgenticRunning;
 
   // Auto-scroll on new messages
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isLoading]);
 
+  useEffect(() => {
+    document.documentElement.dataset.wonderAiAura = isAiAuraActive ? "true" : "false";
+    window.dispatchEvent(new CustomEvent("wonder-ai-aura", { detail: { active: isAiAuraActive } }));
+
+    return () => {
+      document.documentElement.dataset.wonderAiAura = "false";
+      window.dispatchEvent(new CustomEvent("wonder-ai-aura", { detail: { active: false } }));
+    };
+  }, [isAiAuraActive]);
+
   // ── Send ──────────────────────────────────────────────────────────────────
 
   const AUDIO_INTENT_RE = /\b(generate|sound|beat|loop|create|make|sample|drum|bass|pad|melody|chord|music)\b/i;
+  const AGENTIC_MIX_RE = /\b(mix the tracks|auto-level|balance)\b/i;
 
   const sendMessage = async (overrideText?: string) => {
     const text = overrideText ?? input.trim();
@@ -477,6 +517,305 @@ export default function CopilotChat() {
     setInput("");
     setPendingAudio(null);
     setPendingRhythm(null);
+
+    if (AGENTIC_MIX_RE.test(text)) {
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: "user" as const,
+        content: text,
+        parts: [{ type: "text" as const, text }],
+      }]);
+
+      setIsAgenticRunning(true);
+      setAgenticStep(2);
+      await toneEngine.init();
+      const currentTracks = dawStateRef.current.tracks;
+      currentTracks.forEach((track, index) => {
+        const suggestion = getAgenticMixSuggestion(track.name, index);
+        toneEngine.rampStemVolume(track.id, suggestion.volumeDb, 1.5);
+        toneEngine.rampStemPan(track.id, suggestion.pan, 1.5);
+        dawDispatch({
+          type: "UPDATE_TRACK",
+          payload: {
+            id: track.id,
+            volumeDb: suggestion.volumeDb,
+            volume: dbToVolumePercent(suggestion.volumeDb),
+            pan: suggestion.pan,
+            mixAnimating: true,
+          },
+        });
+      });
+
+      window.setTimeout(() => {
+        dawStateRef.current.tracks.forEach((track) => {
+          dawDispatch({
+            type: "UPDATE_TRACK",
+            payload: {
+              id: track.id,
+              mixAnimating: false,
+            },
+          });
+        });
+        setAgenticStep(3);
+        setIsAgenticRunning(false);
+      }, 1500);
+
+      const reply = "Agentic Mix engaged. I balanced the channels, centered the rhythm section, widened the harmonic parts, and ramped the faders over 1.5 seconds.";
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: "assistant" as const,
+        content: reply,
+        parts: [{ type: "text" as const, text: reply }],
+      }]);
+      return;
+    }
+
+    // ── AGENTIC COMMANDS ─────────────────────────────────────────────────────
+    {
+      const isAgenticChop = /agentic chop|chop this loop/i.test(text);
+      const isAgenticMix  = /agentic mix|mix this|engineer the vocals/i.test(text);
+
+      if (isAgenticChop || isAgenticMix) {
+        setMessages(prev => [...prev, {
+          id: crypto.randomUUID(),
+          role: "user" as const,
+          content: text,
+          parts: [{ type: "text" as const, text }],
+        }]);
+
+        setIsAgenticRunning(true);
+        setAgenticStep(0);
+        setTimeout(() => setAgenticStep(1), 500);
+        setTimeout(() => setAgenticStep(2), 1000);
+        setTimeout(() => {
+          setAgenticStep(3);
+
+          const s = dawStateRef.current;
+          let replyText = "";
+
+          if (isAgenticChop) {
+            // Prefer: selected block → first loop block → first block
+            const block =
+              s.blocks.find(b => b.id === s.selectedBlockId) ??
+              s.blocks.find(b => s.tracks.find(t => t.id === b.trackId)?.loop) ??
+              s.blocks[0];
+            if (block) {
+              const sliceDur = block.durationMeasures / 4;
+              const secPerMeasure = (60 / s.transport.bpm) * 4;
+              const sliceSec = sliceDur * secPerMeasure;
+              const baseOffset = block.bufferOffsetSec ?? 0;
+
+              const slices = [0, 1, 2, 3].map(i => ({
+                id: crypto.randomUUID(),
+                trackId: block.trackId,
+                name: `${block.name} [${i + 1}/4]`,
+                startMeasure: block.startMeasure + i * sliceDur,
+                durationMeasures: sliceDur,
+                color: block.color,
+                bufferOffsetSec: baseOffset + i * sliceSec,
+              }));
+
+              // Swap slice 2 (index 1) and slice 4 (index 3) startMeasures for syncopation
+              const s2Start = slices[1].startMeasure;
+              slices[1] = { ...slices[1], startMeasure: slices[3].startMeasure };
+              slices[3] = { ...slices[3], startMeasure: s2Start };
+
+              dawDispatch({ type: "DELETE_BLOCK", payload: block.id });
+              slices.forEach(sl => dawDispatch({ type: "ADD_BLOCK", payload: sl }));
+            }
+            replyText = "I autonomously analyzed the transients and restructured your loop for a more syncopated rhythm.";
+          } else {
+            // isAgenticMix — find vocal/guitar track or fall back to first track
+            const targetTrack =
+              s.tracks.find(t => /vocal|guitar|voice/i.test(t.name)) ?? s.tracks[0];
+            if (targetTrack) {
+              toneEngine.setStemEQ(targetTrack.id, -3, 0, 4);
+              toneEngine.setStemReverb(targetTrack.id, 0.4);
+            }
+            replyText = "I applied an Agentic Mix: rolled off the muddy low-end frequencies, boosted the vocal presence, and added a 40% algorithmic room verb.";
+          }
+
+          setMessages(prev => [...prev, {
+            id: crypto.randomUUID(),
+            role: "assistant" as const,
+            content: replyText,
+            parts: [{ type: "text" as const, text: replyText }],
+          }]);
+
+          setTimeout(() => setIsAgenticRunning(false), 800);
+        }, 1500);
+
+        return;
+      }
+    }
+    // ── END AGENTIC COMMANDS ─────────────────────────────────────────────────
+
+    // ── DEMO MAGIC INTERCEPTS ────────────────────────────────────────────────
+    // Matches specific trigger phrases → instantly populates the DAW from local
+    // files. Zero API calls, zero latency. Perfect for live demos.
+    {
+      const lc = text.toLowerCase();
+      const is80Pop        = /80.{0,5}bpm.{0,10}pop|stack.{0,5}80|melodic.?pop/i.test(lc);
+      const is90Beat       = /\b90\b.{0,20}\b(good|beat|groove|vibe|bang|random|surprise|bpm)\b|\b(good\s*beat|surprise\s*me)\b/i.test(lc);
+      const isRandomDrum   = /random\s*(drum|drums|beat|loop|percussion)/i.test(lc);
+      const isRandomMelody = /random\s*(melody|melodic|melodies|top|chord|arp|piano|guitar|flute|rhodes|organ|sound)/i.test(lc);
+
+      if (is80Pop || is90Beat || isRandomDrum || isRandomMelody) {
+        type DemoTrackDef = { name: string; url: string; color: string };
+
+        // ── 90 BPM sample pools (6 drums × 17 tops = 102 possible combinations) ──
+        const DRUMS_90: DemoTrackDef[] = [
+          { name: "Bangit Drums",     url: "/samples/SO_RE_90_drum_loop_bangit.wav",       color: "#FCA5A5" },
+          { name: "Galapagos Drums",  url: "/samples/SO_RE_90_drum_loop_galapagos.wav",    color: "#FCA5A5" },
+          { name: "Okatie Drums",     url: "/samples/SO_RE_90_drum_loop_okatie.wav",        color: "#FCA5A5" },
+          { name: "Tahiti Drums",     url: "/samples/SO_RE_90_drum_loop_tahiti_full.wav",   color: "#FCA5A5" },
+          { name: "Tahiti Strip",     url: "/samples/SO_RE_90_drum_loop_tahiti_strip.wav",  color: "#FCA5A5" },
+          { name: "Waterworld Drums", url: "/samples/SO_RE_90_drum_loop_waterworld.wav",    color: "#FCA5A5" },
+        ];
+
+        const TOPS_90: DemoTrackDef[] = [
+          { name: "Basil Guitar Arp",    url: "/samples/SO_RE_90_guitar_arp_basil_Cmaj.wav",                color: "#C1E1C1" },
+          { name: "Azure Guitar",        url: "/samples/SO_RE_90_guitar_azure_Fmin.wav",                    color: "#C1E1C1" },
+          { name: "Beige Guitar Rhythm", url: "/samples/SO_RE_90_guitar_rhythm_beige_Cmaj.wav",             color: "#C1E1C1" },
+          { name: "Birch Guitar Strum",  url: "/samples/SO_RE_90_guitar_strum_birch_Cmaj.wav",              color: "#C1E1C1" },
+          { name: "Cucumber Flute",      url: "/samples/SO_RE_90_melodic_stack_cucumber_flute_Fmaj.wav",    color: "#E9D5FF" },
+          { name: "Cyan Arp",            url: "/samples/SO_RE_90_melodic_stack_cyan_arp_Fmaj.wav",          color: "#BAE6FD" },
+          { name: "Cyprus Flute",        url: "/samples/SO_RE_90_melodic_stack_cyprus_flute_Cmaj.wav",      color: "#E9D5FF" },
+          { name: "Diamond Glock",       url: "/samples/SO_RE_90_melodic_stack_diamond_glock_Fmaj.wav",     color: "#FEF08A" },
+          { name: "Elderberry Guitar",   url: "/samples/SO_RE_90_melodic_stack_elderberry_guitar_Cmaj.wav", color: "#BBF7D0" },
+          { name: "Elm Organ",           url: "/samples/SO_RE_90_melodic_stack_elm_organ_Fmaj.wav",         color: "#DDD6FE" },
+          { name: "Emerald Piano",       url: "/samples/SO_RE_90_melodic_stack_emerald_piano_Cmaj.wav",     color: "#BBF7D0" },
+          { name: "Fennel Rhodes",       url: "/samples/SO_RE_90_melodic_stack_fennel_rhodes_Cmaj.wav",     color: "#DDD6FE" },
+          { name: "Fern Flute",          url: "/samples/SO_RE_90_melodic_stack_fern_flute_Fmin.wav",        color: "#E9D5FF" },
+          { name: "Fig Orchestra",       url: "/samples/SO_RE_90_melodic_stack_fig_orchestra_Fmin.wav",     color: "#FED7AA" },
+          { name: "Fuchsia Rhodes",      url: "/samples/SO_RE_90_melodic_stack_fuchsia_rhodes_Fmin.wav",    color: "#E9D5FF" },
+          { name: "Guitar Resample",     url: "/samples/SO_RE_90_resample_guitar_Cmaj.wav",                 color: "#C1E1C1" },
+          { name: "Waterworld Texture",  url: "/samples/SO_RE_90_resample_waterworld_Gmin.wav",             color: "#BAE6FD" },
+        ];
+
+        const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+        const pickN = <T,>(arr: T[], n: number): T[] =>
+          [...arr].sort(() => Math.random() - 0.5).slice(0, n);
+
+        // bpm is optional — single-track drops keep whatever BPM is already set
+        let scenario: { bpm?: number; reply: string; tracks: DemoTrackDef[] };
+
+        if (is80Pop) {
+          scenario = {
+            bpm: 80,
+            reply: "I've generated a cohesive 3-track pop arrangement at 80 BPM. I stacked modern drums with cashmere melodies and sienna strings.",
+            tracks: [
+              { name: "Modern Pop Drums", url: "/samples/OLIVER_80_drum_loop_modern_pop_tight_foley.wav", color: "#FCA5A5" },
+              { name: "Cashmere Melody",  url: "/samples/SO_RE_80_melodic_stack_cashmere_Cmaj.wav",        color: "#C1E1C1" },
+              { name: "Sienna Strings",   url: "/samples/SO_RE_80_strings_chords_sienna_Cmaj.wav",         color: "#E9D5FF" },
+            ],
+          };
+        } else if (isRandomDrum) {
+          const drum = pick(DRUMS_90);
+          scenario = {
+            reply: `Dropped ${drum.name} onto a new track.`,
+            tracks: [drum],
+          };
+        } else if (isRandomMelody) {
+          const top = pick(TOPS_90);
+          scenario = {
+            reply: `Loaded ${top.name} onto a new track.`,
+            tracks: [top],
+          };
+        } else {
+          // 90 BPM beat: 1 drum + 1 top so keys don't clash
+          const drum = pick(DRUMS_90);
+          const top  = pick(TOPS_90);
+          scenario = {
+            bpm: 90,
+            reply: `Built a 90 BPM beat — ${drum.name} in the pocket with ${top.name} on top. Hit me again for a different roll.`,
+            tracks: [drum, top],
+          };
+        }
+
+        // 1. Echo the user's message immediately so the chat doesn't look frozen
+        setMessages(prev => [...prev, {
+          id: crypto.randomUUID(),
+          role: "user" as const,
+          content: text,
+          parts: [{ type: "text" as const, text }],
+        }]);
+
+        // 2. "Thinking" placeholder — replaced with the real reply after the delay
+        const thinkingId = crypto.randomUUID();
+        setMessages(prev => [...prev, {
+          id: thinkingId,
+          role: "assistant" as const,
+          content: "◌  Composing your session…",
+          parts: [{ type: "text" as const, text: "◌  Composing your session…" }],
+        }]);
+
+        setIsGeneratingAudio(true);
+
+        setTimeout(async () => {
+          // 3. Only update BPM if the scenario specifies one (single-track drops don't)
+          if (scenario.bpm !== undefined) {
+            Tone.getTransport().bpm.value = scenario.bpm;
+            dawDispatch({ type: "SET_TRANSPORT", payload: { bpm: scenario.bpm } });
+          }
+
+          // 4. Fetch all audio files in parallel, then dispatch track/audio/block
+          const currentBpm = scenario.bpm ?? dawStateRef.current.transport.bpm;
+          const loopDurationSec = (4 * 4 * 60) / currentBpm;
+
+          await Promise.all(
+            scenario.tracks.map(async (def) => {
+              try {
+                const resp = await fetch(def.url);
+                if (!resp.ok) return;
+                const blob = await resp.blob();
+                const trackId = crypto.randomUUID();
+
+                dawDispatch({
+                  type: "ADD_TRACK",
+                  payload: {
+                    id: trackId,
+                    name: def.name,
+                    color: def.color,
+                    muted: false,
+                    volume: 80,
+                    loop: true,
+                    loopBars: 4,
+                    loopDurationSec,
+                  },
+                });
+                dawDispatch({ type: "LOAD_AUDIO", payload: { trackId, blob } });
+                dawDispatch({
+                  type: "ADD_BLOCK",
+                  payload: {
+                    id: crypto.randomUUID(),
+                    trackId,
+                    name: def.name,
+                    startMeasure: 1,
+                    durationMeasures: 4,
+                    color: def.color,
+                  },
+                });
+              } catch { /* file missing — skip silently */ }
+            }),
+          );
+
+          // 5. Swap the thinking placeholder with the final AI reply
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === thinkingId
+                ? { ...m, content: scenario.reply, parts: [{ type: "text" as const, text: scenario.reply }] }
+                : m,
+            ),
+          );
+
+          setIsGeneratingAudio(false);
+        }, 1500);
+
+        return; // Never reach the AI API for demo triggers
+      }
+    }
+    // ── END DEMO MAGIC ───────────────────────────────────────────────────────
 
     const fullText = spotifyPrefix + text + rhythmSuffix;
 
@@ -595,6 +934,18 @@ export default function CopilotChat() {
 
   const stopRecording = () => { mediaRecorderRef.current?.stop(); setIsRecording(false); };
 
+  // Expose recording controls globally so the DAW transport Record button can trigger them
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__wonderStartRecording = startRecording;
+    (window as unknown as Record<string, unknown>).__wonderStopRecording  = stopRecording;
+    (window as unknown as Record<string, unknown>).__wonderIsRecording    = () => isRecording;
+    return () => {
+      delete (window as unknown as Record<string, unknown>).__wonderStartRecording;
+      delete (window as unknown as Record<string, unknown>).__wonderStopRecording;
+      delete (window as unknown as Record<string, unknown>).__wonderIsRecording;
+    };
+  }, [startRecording, stopRecording, isRecording]);
+
   // ── Tap rhythm ─────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -658,7 +1009,7 @@ export default function CopilotChat() {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 no-scrollbar [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {displayMessages.length === 0 && (
           <div className="text-center pt-8">
             <p className="font-mono text-[10px] uppercase tracking-widest text-[#2D2D2D]/25 mb-3">Try saying</p>
@@ -682,6 +1033,31 @@ export default function CopilotChat() {
             </div>
           </div>
         ))}
+
+        {isAgenticRunning && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[9px] font-mono font-bold uppercase tracking-[0.15em] text-[#2D2D2D]/35 px-0.5">WONDER AI · AGENTIC</span>
+            <div className="bg-[#1A1A1A] border-2 border-[#1A1A1A] rounded-xl px-3.5 py-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+              {(["Analyzing arrangement...", "Selecting optimal tools...", "Executing DSP changes...", "Agentic workflow complete."] as const).map((label, i) => {
+                if (i > agenticStep) return null;
+                const isComplete = i < agenticStep || agenticStep === 3;
+                return (
+                  <div key={i} className={`font-mono text-[11px] flex items-center gap-2 ${i > 0 ? "mt-1.5" : ""}`}>
+                    <span className={isComplete ? "text-[#C1E1C1]" : "text-white"}>
+                      {isComplete ? "[x]" : "[ ]"}
+                    </span>
+                    <span className={isComplete ? "text-white/50" : "text-white"}>
+                      {label}
+                    </span>
+                    {!isComplete && (
+                      <span className="w-1.5 h-1.5 bg-white/60 rounded-full animate-pulse ml-0.5" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {(isLoading || isGeneratingAudio) && (
           <div className="flex flex-col gap-1.5">

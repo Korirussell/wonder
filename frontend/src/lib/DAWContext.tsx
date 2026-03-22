@@ -1,7 +1,18 @@
 "use client";
 
 import { createContext, useContext, useReducer, type ReactNode } from "react";
-import type { DAWState, DAWTrack, DAWBlock, DAWTransport, DrumPattern, SampleLibraryEntry } from "@/types";
+import type {
+  DAWState,
+  DAWTrack,
+  DAWBlock,
+  DAWTransport,
+  DrumPattern,
+  SampleLibraryEntry,
+  DAWRecordingState,
+  DAWLoopState,
+  DAWGridSize,
+} from "@/types";
+import { normalizeTrackPatch, withTrackMixDefaults } from "./mixUtils";
 
 // ─── Action Types ─────────────────────────────────────────────────────────────
 
@@ -16,7 +27,10 @@ type DAWAction =
   | { type: "LOAD_AUDIO"; payload: { trackId: string; blob: Blob } }
   | { type: "SET_SELECTED_BLOCK"; payload: string | null }
   | { type: "SET_DRUM_PATTERN"; payload: Partial<DrumPattern> }
-  | { type: "ADD_TO_LIBRARY"; payload: SampleLibraryEntry };
+  | { type: "ADD_TO_LIBRARY"; payload: SampleLibraryEntry }
+  | { type: "SET_RECORDING_STATE"; payload: Partial<DAWRecordingState> }
+  | { type: "SET_LOOP_STATE"; payload: Partial<DAWLoopState> }
+  | { type: "SET_GRID_SIZE"; payload: DAWGridSize };
 
 // ─── Initial State ────────────────────────────────────────────────────────────
 
@@ -26,6 +40,18 @@ const initialState: DAWState = {
   blocks: [],
   selectedBlockId: null,
   sampleLibrary: [],
+  recording: {
+    isRecording: false,
+    armedTrackId: null,
+    recordStartTime: null,
+    monitorEnabled: false,
+  },
+  loop: {
+    loopEnabled: false,
+    loopStart: 0,
+    loopEnd: (4 * 4 * 60) / 85,
+  },
+  gridSize: 16,
   drumPattern: {
     kick:    [false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false],
     snare:   [false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false],
@@ -47,14 +73,16 @@ function dawReducer(state: DAWState, action: DAWAction): DAWState {
     case "ADD_TRACK":
       return {
         ...state,
-        tracks: [...state.tracks, action.payload],
+        tracks: [...state.tracks, withTrackMixDefaults(action.payload)],
       };
 
     case "UPDATE_TRACK":
       return {
         ...state,
         tracks: state.tracks.map((t) =>
-          t.id === action.payload.id ? { ...t, ...action.payload } : t
+          t.id === action.payload.id
+            ? withTrackMixDefaults({ ...t, ...normalizeTrackPatch(action.payload) })
+            : t
         ),
       };
 
@@ -119,6 +147,24 @@ function dawReducer(state: DAWState, action: DAWAction): DAWState {
       return {
         ...state,
         sampleLibrary: [action.payload, ...state.sampleLibrary],
+      };
+
+    case "SET_RECORDING_STATE":
+      return {
+        ...state,
+        recording: { ...state.recording, ...action.payload },
+      };
+
+    case "SET_LOOP_STATE":
+      return {
+        ...state,
+        loop: { ...state.loop, ...action.payload },
+      };
+
+    case "SET_GRID_SIZE":
+      return {
+        ...state,
+        gridSize: action.payload,
       };
 
     default:

@@ -10,6 +10,7 @@ import {
   Drum,
   Grid3X3,
   Wand2,
+  SlidersHorizontal,
 } from "lucide-react";
 import type { DAWTransport } from "@/types";
 
@@ -22,6 +23,14 @@ interface DAWTransportBarProps {
   onExport: () => void;
   drumsOpen: boolean;
   onToggleDrums: () => void;
+  onRecord?: () => void;
+  isRecording?: boolean;
+  loopEnabled?: boolean;
+  onToggleLoop?: () => void;
+  monitorEnabled?: boolean;
+  onToggleMonitor?: () => void;
+  mixerOpen?: boolean;
+  onToggleMixer?: () => void;
 }
 
 export function DAWTransportBar({
@@ -33,6 +42,14 @@ export function DAWTransportBar({
   onExport,
   drumsOpen,
   onToggleDrums,
+  onRecord,
+  isRecording = false,
+  loopEnabled = false,
+  onToggleLoop,
+  monitorEnabled = false,
+  onToggleMonitor,
+  mixerOpen = false,
+  onToggleMixer,
 }: DAWTransportBarProps) {
   const measure = Math.floor(transport.currentMeasure);
   const positionStr = `${String(measure).padStart(2, "0")}.01.128`;
@@ -47,11 +64,11 @@ export function DAWTransportBar({
     <div className="h-[60px] bg-[#232323] border-t border-[#333] flex items-center px-5 gap-4 shrink-0">
 
       {/* Left: transport controls in a visible pill */}
-      <div className="flex items-center gap-0.5 bg-[#303030] rounded-full px-2.5 py-1.5 border border-[#444]">
+      <div className="flex items-center gap-0.5 bg-[#303030] rounded-sm px-2.5 py-1.5 border-2 border-[#1A1A1A] shadow-[3px_3px_0px_0px_rgba(26,26,26,1)]">
         {/* Rewind */}
         <button
           onClick={onRewind}
-          className="w-8 h-8 flex items-center justify-center text-[#aaa] hover:text-white transition-colors rounded-full hover:bg-white/8"
+          className="w-8 h-8 flex items-center justify-center text-[#aaa] hover:text-white transition-colors rounded-sm hover:bg-white/8"
           title="Return to start"
         >
           <SkipBack size={13} strokeWidth={2} />
@@ -60,7 +77,7 @@ export function DAWTransportBar({
         {/* Play / Stop */}
         <button
           onClick={transport.isPlaying ? onStop : onPlay}
-          className="w-[38px] h-[38px] rounded-full bg-[#3DBE4E] hover:bg-[#35AB44] flex items-center justify-center transition-all shadow-[0_0_12px_rgba(61,190,78,0.35)] active:scale-95"
+          className="w-[38px] h-[38px] rounded-sm bg-[#3DBE4E] hover:bg-[#35AB44] flex items-center justify-center transition-all shadow-[0_0_12px_rgba(61,190,78,0.35)] active:scale-95"
           title={transport.isPlaying ? "Stop" : "Play"}
         >
           {transport.isPlaying ? (
@@ -73,7 +90,7 @@ export function DAWTransportBar({
         {/* Stop */}
         <button
           onClick={onStop}
-          className="w-8 h-8 flex items-center justify-center text-[#aaa] hover:text-white transition-colors rounded-full hover:bg-white/8"
+          className="w-8 h-8 flex items-center justify-center text-[#aaa] hover:text-white transition-colors rounded-sm hover:bg-white/8"
           title="Stop"
         >
           <Square size={12} strokeWidth={1.5} />
@@ -81,10 +98,28 @@ export function DAWTransportBar({
 
         {/* Record */}
         <button
-          className="w-8 h-8 flex items-center justify-center transition-colors rounded-full hover:bg-white/8"
-          title="Record"
+          onClick={onRecord}
+          className={`w-8 h-8 flex items-center justify-center transition-colors rounded-sm hover:bg-white/8 ${isRecording ? "bg-[#E05A3A]/20" : ""}`}
+          title={isRecording ? "Stop recording" : "Record audio"}
         >
-          <Circle size={10} fill="#E05A3A" strokeWidth={0} className="text-[#E05A3A]" />
+          <Circle
+            size={10}
+            fill={isRecording ? "#E05A3A" : "#E05A3A"}
+            strokeWidth={0}
+            className={isRecording ? "animate-pulse" : "opacity-70"}
+          />
+        </button>
+
+        <button
+          onClick={onToggleMonitor}
+          className={`px-2 py-1 rounded-sm border-2 font-mono text-[8px] font-bold uppercase tracking-widest transition-colors ${
+            monitorEnabled
+              ? "bg-[#C1E1C1] border-[#C1E1C1] text-[#1A1A1A]"
+              : "border-[#444] text-[#888] hover:text-white hover:border-[#666]"
+          }`}
+          title={monitorEnabled ? "Disable input monitoring" : "Enable input monitoring"}
+        >
+          Mon
         </button>
       </div>
 
@@ -115,7 +150,12 @@ export function DAWTransportBar({
       <div className="flex items-center gap-1.5">
         {/* Loop */}
         <button
-          className="w-8 h-8 flex items-center justify-center text-[#888] hover:text-[#ccc] transition-colors rounded-md hover:bg-white/6"
+          onClick={onToggleLoop}
+          className={`w-8 h-8 flex items-center justify-center transition-colors rounded-sm ${
+            loopEnabled
+              ? "bg-[#FEF08A]/20 text-[#FEF08A]"
+              : "text-[#888] hover:text-[#ccc] hover:bg-white/6"
+          }`}
           title="Loop"
         >
           <RefreshCw size={13} strokeWidth={1.5} />
@@ -124,7 +164,7 @@ export function DAWTransportBar({
         {/* Grid */}
         <button
           onClick={onToggleDrums}
-          className={`w-8 h-8 flex items-center justify-center transition-colors rounded-md ${drumsOpen
+          className={`w-8 h-8 flex items-center justify-center transition-colors rounded-sm ${drumsOpen
               ? "text-[#F5C542] bg-[#F5C542]/12"
               : "text-[#888] hover:text-[#ccc] hover:bg-white/6"
             }`}
@@ -135,7 +175,7 @@ export function DAWTransportBar({
 
         {/* AI Wand — yellow button, very visible */}
         <button
-          className="w-8 h-8 rounded-full bg-[#F5C542] flex items-center justify-center text-[#1a1a1a] hover:bg-[#e6b830] transition-colors shadow-[0_0_10px_rgba(245,197,66,0.3)]"
+          className="w-8 h-8 rounded-sm bg-[#F5C542] flex items-center justify-center text-[#1a1a1a] hover:bg-[#e6b830] transition-colors shadow-[0_0_10px_rgba(245,197,66,0.3)]"
           title="AI Suggestions"
         >
           <Wand2 size={13} strokeWidth={2} />
@@ -146,7 +186,7 @@ export function DAWTransportBar({
         {/* Drums text button */}
         <button
           onClick={onToggleDrums}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-mono text-[9px] font-bold uppercase tracking-widest transition-colors border ${drumsOpen
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm font-mono text-[9px] font-bold uppercase tracking-widest transition-colors border-2 ${drumsOpen
               ? "bg-[#F5C542]/12 border-[#F5C542]/35 text-[#F5C542]"
               : "bg-[#2c2c2c] border-[#3e3e3e] text-[#888] hover:text-[#bbb] hover:border-[#555]"
             }`}
@@ -159,18 +199,25 @@ export function DAWTransportBar({
         {/* Export */}
         <button
           onClick={onExport}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-mono text-[9px] font-bold uppercase tracking-widest bg-[#2c2c2c] border border-[#3e3e3e] text-[#888] hover:text-[#bbb] hover:border-[#555] transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm font-mono text-[9px] font-bold uppercase tracking-widest bg-[#2c2c2c] border-2 border-[#3e3e3e] text-[#888] hover:text-[#bbb] hover:border-[#555] transition-colors"
           title="Export as WAV"
         >
           <Download size={11} strokeWidth={1.5} />
           Export
         </button>
 
-        {/* Mixer View badge */}
-        <div className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-mono text-[9px] font-bold uppercase tracking-widest bg-[#2c2c2c] border border-[#3e3e3e] text-[#666] select-none">
-          Mixer View
-          <span className="text-[#444] text-[8px] ml-0.5">F3</span>
-        </div>
+        <button
+          onClick={onToggleMixer}
+          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-sm font-mono text-[9px] font-bold uppercase tracking-widest border-2 transition-colors ${
+            mixerOpen
+              ? "bg-[#C1E1C1] border-[#C1E1C1] text-[#1A1A1A]"
+              : "bg-[#2c2c2c] border-[#3e3e3e] text-[#666] hover:text-[#bbb] hover:border-[#555]"
+          }`}
+          title="Toggle mixer"
+        >
+          <SlidersHorizontal size={11} strokeWidth={1.5} />
+          Mixer
+        </button>
       </div>
 
       {/* BPM — visible on hover */}

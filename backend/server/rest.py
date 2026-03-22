@@ -8,6 +8,7 @@ Run:
 """
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -17,10 +18,17 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pymongo import MongoClient
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from ._handlers import OUTPUT_ROOT, handle_generate, handle_split, handle_split_and_generate
 from .utils.audio_to_midi import get_midi_file_path, transcribe_audio_base64
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(_REPO_ROOT / ".env")
+load_dotenv(_BACKEND_ROOT / ".env")
 
 app = FastAPI(
     title="Wonder Server",
@@ -40,6 +48,48 @@ OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 app.mount("/files", StaticFiles(directory=str(OUTPUT_ROOT)), name="files")
 
 
+MOCK_CLOUD_SAMPLES = [
+    {
+        "id": "mock-lofi-kick",
+        "name": "Lofi Kick",
+        "url": "https://cdn.pixabay.com/download/audio/2022/03/10/audio_c8b0f70f21.mp3?filename=kick-drum-deep-112192.mp3",
+        "tags": ["drum", "warm"],
+    },
+    {
+        "id": "mock-vinyl-snare",
+        "name": "Vinyl Snare",
+        "url": "https://cdn.pixabay.com/download/audio/2022/03/15/audio_c9c6a3f7d4.mp3?filename=snare-hit-113198.mp3",
+        "tags": ["drum", "dusty"],
+    },
+    {
+        "id": "mock-soft-hat",
+        "name": "Soft Hat",
+        "url": "https://cdn.pixabay.com/download/audio/2022/03/10/audio_d467c872ce.mp3?filename=hi-hat-112190.mp3",
+        "tags": ["percussion", "bright"],
+    },
+]
+
+
+def _normalize_cloud_sample(doc: dict[str, Any]) -> dict[str, Any]:
+    raw_url = doc.get("url") or doc.get("uri") or ""
+    url = raw_url if isinstance(raw_url, str) and raw_url.startswith(("http://", "https://")) else ""
+
+    raw_name = doc.get("name") or doc.get("file_name") or Path(str(doc.get("file_path") or "")).stem
+    name = raw_name if isinstance(raw_name, str) and raw_name.strip() else "Untitled Sample"
+
+    raw_tags = doc.get("tags")
+    if not isinstance(raw_tags, list):
+        raw_tags = doc.get("vibe", {}).get("tags", [])
+    tags = [str(tag) for tag in raw_tags if isinstance(tag, str) and tag.strip()]
+
+    return {
+        "id": str(doc.get("_id", "")),
+        "name": name,
+        "url": url,
+        "tags": tags,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -55,6 +105,47 @@ def health_mongo() -> dict[str, object]:
     from .mongo import mongo_health
 
     return mongo_health()
+
+
+@app.get("/api/cloud-samples")
+def get_cloud_samples() -> list[dict[str, Any]]:
+    """
+    Lightweight Atlas fetch with a blast shield for demo reliability.
+    Returns a hardcoded fallback list if MongoDB is unavailable within 3 seconds.
+    """
+    mongodb_uri = os.getenv("MONGODB_URI")
+    configured_db_name = (os.getenv("MONGODB_DB_NAME") or os.getenv("MONGO_DB") or "").strip()
+    if not mongodb_uri:
+        return MOCK_CLOUD_SAMPLES
+
+    try:
+        with MongoClient(
+            mongodb_uri,
+            serverSelectionTimeoutMS=3000,
+            connectTimeoutMS=3000,
+            socketTimeoutMS=3000,
+        ) as client:
+            client.admin.command("ping")
+
+            if configured_db_name:
+                db = client[configured_db_name]
+            else:
+                try:
+                    db = client.get_default_database()
+                except Exception:
+                    db = client["wonder-free"]
+            if db is None:
+                db = client.get_default_database()
+
+            cursor = db["samples"].find(
+                {},
+                {"name": 1, "url": 1, "tags": 1, "uri": 1, "file_name": 1, "file_path": 1, "vibe.tags": 1},
+            ).limit(20)
+            normalized = [_normalize_cloud_sample(doc) for doc in cursor]
+            playable_samples = [sample for sample in normalized if sample["url"]]
+            return playable_samples or MOCK_CLOUD_SAMPLES
+    except Exception:
+        return MOCK_CLOUD_SAMPLES
 
 
 # ---------------------------------------------------------------------------

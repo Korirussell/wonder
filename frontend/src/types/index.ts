@@ -98,7 +98,12 @@ export interface DAWTrack {
   color: string; // hex e.g. "#C1E1C1"
   muted: boolean;
   volume: number; // 0–100
+  volumeDb?: number;
+  pan?: number;
+  solo?: boolean;
+  mixAnimating?: boolean;
   audioBlob?: Blob;
+  audioDurationSec?: number;
   audioStorageId?: string; // IndexedDB key
   waveformCache?: number[];
   // Loop stem config — set when track was generated as a looping backing track
@@ -114,6 +119,7 @@ export interface DAWBlock {
   startMeasure: number; // 1-based, 0.25 snap granularity
   durationMeasures: number;
   color?: string;
+  bufferOffsetSec?: number; // NDE: seconds into audio buffer where this clip starts (set by razor splits)
 }
 
 export interface DAWTransport {
@@ -122,6 +128,21 @@ export interface DAWTransport {
   bpm: number;
   totalMeasures: number;
 }
+
+export interface DAWRecordingState {
+  isRecording: boolean;
+  armedTrackId: string | null;
+  recordStartTime: number | null;
+  monitorEnabled: boolean;
+}
+
+export interface DAWLoopState {
+  loopEnabled: boolean;
+  loopStart: number;
+  loopEnd: number;
+}
+
+export type DAWGridSize = 8 | 16 | 32 | 64;
 
 export interface DrumPattern {
   kick:    boolean[];  // 16 steps
@@ -145,4 +166,7 @@ export interface DAWState {
   selectedBlockId: string | null;
   drumPattern?: DrumPattern;
   sampleLibrary: SampleLibraryEntry[];
+  recording: DAWRecordingState;
+  loop: DAWLoopState;
+  gridSize: DAWGridSize;
 }

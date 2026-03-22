@@ -2,9 +2,8 @@
 
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Upload, Trash2 } from "lucide-react";
+import { Circle, Upload, Trash2 } from "lucide-react";
 import type { DAWTrack, DAWBlock } from "@/types";
-import { AudioInterfaceRecorder } from "./AudioInterfaceRecorder";
 import { toneEngine } from "@/lib/toneEngine";
 
 const TRACK_ROW_HEIGHT = 72; // must match DAWTimeline
@@ -15,12 +14,10 @@ interface FXPanelProps {
   trackId: string;
   trackName: string;
   color: string;
-  anchorTop: number;
-  anchorLeft: number;
   onClose: () => void;
 }
 
-function FXPanel({ trackId, trackName, color, anchorTop, anchorLeft, onClose }: FXPanelProps) {
+function FXPanel({ trackId, trackName, color, onClose }: FXPanelProps) {
   const [volDb,      setVolDb]      = useState(0);
   const [reverbWet,  setReverbWet]  = useState(0);
   const [eqLow,      setEqLow]      = useState(0);
@@ -46,10 +43,10 @@ function FXPanel({ trackId, trackName, color, anchorTop, anchorLeft, onClose }: 
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-[9998]" onClick={onClose} />
+      <div className="fixed inset-0 z-[9998] bg-black/25 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="fixed z-[9999] bg-[#1A1A1A] border-2 border-white/20 shadow-[4px_4px_0px_0px_rgba(255,255,255,0.08)] p-4 w-64"
-        style={{ bottom: `calc(100vh - ${anchorTop}px + 6px)`, left: anchorLeft }}
+        className="fixed left-1/2 top-1/2 z-[9999] w-[320px] -translate-x-1/2 -translate-y-1/2 bg-[#1A1A1A] border-2 border-white/20 shadow-[8px_8px_0px_0px_rgba(255,255,255,0.08)] p-4"
+        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center gap-2 mb-4">
@@ -128,30 +125,28 @@ function FXPanel({ trackId, trackName, color, anchorTop, anchorLeft, onClose }: 
 function TrackRow({
   track,
   index,
+  isArmed,
+  isRecording,
   onUpdateTrack,
   onDeleteTrack,
   onUploadAudio,
+  onRecordTrack,
 }: {
   track: DAWTrack;
   index: number;
+  isArmed: boolean;
+  isRecording: boolean;
   onUpdateTrack: (id: string, patch: Partial<DAWTrack>) => void;
   onDeleteTrack: (id: string) => void;
   onUploadAudio: (trackId: string, file: File) => void;
+  onRecordTrack: (trackId: string) => void;
 }) {
   const [editing,  setEditing]  = useState(false);
   const [nameInput, setNameInput] = useState(track.name);
   const [fxOpen,   setFxOpen]   = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const fxBtnRef     = useRef<HTMLButtonElement>(null);
-  const [fxPos, setFxPos] = useState({ top: 0, left: 0 });
 
-  const openFX = () => {
-    if (fxBtnRef.current) {
-      const r = fxBtnRef.current.getBoundingClientRect();
-      setFxPos({ top: r.top, left: r.left });
-    }
-    setFxOpen(true);
-  };
+  const openFX = () => setFxOpen(true);
 
   const commitName = () => {
     setEditing(false);
@@ -221,7 +216,6 @@ function TrackRow({
 
             {/* FX button */}
             <button
-              ref={fxBtnRef}
               onClick={openFX}
               title="Channel strip (EQ + Reverb)"
               className="w-[22px] h-[22px] rounded text-[8px] font-bold font-mono flex items-center justify-center border border-[#C8C8C2] bg-[#F0F0EB] text-[#555] hover:bg-[#C1E1C1] hover:border-[#7DBF7D] transition-all select-none"
@@ -265,10 +259,24 @@ function TrackRow({
           />
 
           {/* Record */}
-          <AudioInterfaceRecorder
-            trackId={track.id}
-            onRecordingComplete={(id, file) => onUploadAudio(id, file)}
-          />
+          <button
+            onClick={() => onRecordTrack(track.id)}
+            title={isRecording ? "Stop overdub recording" : isArmed ? "Start overdub recording" : "Arm track and record"}
+            className={`w-6 h-6 flex items-center justify-center rounded border transition-colors ${
+              isRecording
+                ? "bg-[#E05A3A] border-[#B33F24] text-white"
+                : isArmed
+                  ? "bg-[#FEF08A] border-[#1A1A1A] text-[#1A1A1A]"
+                  : "bg-white border-[#1A1A1A]/20 text-[#1A1A1A]/45 hover:border-[#1A1A1A]"
+            }`}
+          >
+            <Circle
+              size={10}
+              fill="currentColor"
+              strokeWidth={0}
+              className={isRecording ? "recording-pulse" : ""}
+            />
+          </button>
 
           {/* Delete */}
           <button
@@ -287,8 +295,6 @@ function TrackRow({
           trackId={track.id}
           trackName={track.name}
           color={track.color}
-          anchorTop={fxPos.top}
-          anchorLeft={fxPos.left}
           onClose={() => setFxOpen(false)}
         />
       )}
@@ -300,34 +306,43 @@ function TrackRow({
 
 export function DAWTrackList({
   tracks,
-  blocks: _blocks,
+  recordingTrackId,
+  isRecording,
   onAddTrack,
   onUpdateTrack,
   onDeleteTrack,
   onUploadAudio,
+  onRecordTrack,
 }: {
   tracks: DAWTrack[];
   blocks: DAWBlock[];
+  recordingTrackId: string | null;
+  isRecording: boolean;
   onAddTrack: () => void;
   onUpdateTrack: (id: string, patch: Partial<DAWTrack>) => void;
   onDeleteTrack: (id: string) => void;
   onUploadAudio: (trackId: string, file: File) => void;
+  onRecordTrack: (trackId: string) => void;
 }) {
   return (
-    <div className="w-[230px] shrink-0 border-r border-[#D4D4CE] flex flex-col bg-[#F8F8F4] overflow-hidden">
-      {/* Ruler-height spacer */}
+    <div className="w-[230px] min-w-[230px] flex-shrink-0 border-r border-[#D4D4CE] flex flex-col bg-[#F8F8F4] overflow-hidden">
+      <div className="h-8 border-b-2 border-[#1A1A1A] bg-[#F0F0EB] shrink-0" />
       <div className="h-10 border-b border-[#D4D4CE] bg-[#F0F0EB] shrink-0" />
+      <div className="h-8 border-b-2 border-[#1A1A1A] bg-[#F7F6F1] shrink-0" />
 
       {/* Track rows */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
+      <div className="flex-1 overflow-y-auto no-scrollbar [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tracks.map((track, i) => (
           <TrackRow
             key={track.id}
             track={track}
             index={i}
+            isArmed={recordingTrackId === track.id}
+            isRecording={isRecording && recordingTrackId === track.id}
             onUpdateTrack={onUpdateTrack}
             onDeleteTrack={onDeleteTrack}
             onUploadAudio={onUploadAudio}
+            onRecordTrack={onRecordTrack}
           />
         ))}
 

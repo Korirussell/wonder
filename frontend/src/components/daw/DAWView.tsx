@@ -1,14 +1,16 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import * as Tone from "tone";
 import { useDAWContext } from "@/lib/DAWContext";
 import { useDAWEngine } from "@/lib/useDAWEngine";
 import { useAudioAnalysis } from "@/lib/useAudioAnalysis";
+import { toneEngine } from "@/lib/toneEngine";
 import { DAWTransportBar } from "./DAWTransportBar";
 import { DAWTrackList } from "./DAWTrackList";
 import { DAWTimeline } from "./DAWTimeline";
 import { DrumRack } from "./DrumRack";
+import { MixerDrawer } from "./MixerDrawer";
 import ToneWaveformViz from "@/components/ToneWaveformViz";
 import type { DAWTrack, DrumPattern } from "@/types";
 
@@ -31,35 +33,59 @@ export default function DAWView() {
     dispatch: dispatch as React.Dispatch<{ type: string; payload?: unknown }>,
   });
   const [drumsOpen, setDrumsOpen] = useState(false);
+  const [mixerOpen, setMixerOpen] = useState(false);
   const { analysis, analyzing, analyze } = useAudioAnalysis();
-
-  // ─── Global spacebar play/pause ──────────────────────────────────────────────
-  // Mirrors Ableton's spacebar shortcut. Skips if focus is inside a text input.
-  const handleSpacebar = useCallback((e: KeyboardEvent) => {
-    if (e.code !== "Space") return;
-
-    // Input trap: let the user type spaces in chat/inputs
-    const el = document.activeElement;
-    const tag = el?.tagName.toLowerCase() ?? "";
-    if (
-      tag === "input" ||
-      tag === "textarea" ||
-      (el as HTMLElement)?.isContentEditable
-    ) return;
-
-    e.preventDefault(); // stop browser scroll
-
-    if (Tone.getTransport().state === "started") {
-      stopPlayback();
-    } else {
-      startPlayback();
-    }
-  }, [startPlayback, stopPlayback]);
+  const stateRef = useRef(state);
+  // Raw MediaStream from getUserMedia — used for both MediaRecorder and monitoring
+  const rawStreamRef    = useRef<MediaStream | null>(null);
+  const monitorNodeRef  = useRef<AudioNode | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const activeRecordingRef = useRef<{
+    trackId: string;
+    startSec: number;
+    stopSec: number | null;
+    mimeType: string;
+  } | null>(null);
 
   useEffect(() => {
-    window.addEventListener("keydown", handleSpacebar);
-    return () => window.removeEventListener("keydown", handleSpacebar);
-  }, [handleSpacebar]);
+    stateRef.current = state;
+  }, [state]);
+
+  // Connect / disconnect mic stream to speakers for live monitoring
+  const syncMonitorRouting = useCallback(() => {
+    const stream = rawStreamRef.current;
+    // Tear down previous monitor node first
+    if (monitorNodeRef.current) {
+      try { monitorNodeRef.current.disconnect(); } catch { /* ignore */ }
+      monitorNodeRef.current = null;
+    }
+    if (!stream || !stateRef.current.recording.monitorEnabled) return;
+    try {
+      const ctx = Tone.getContext().rawContext as AudioContext;
+      const src = ctx.createMediaStreamSource(stream);
+      src.connect(ctx.destination);
+      monitorNodeRef.current = src;
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    syncMonitorRouting();
+  }, [state.recording.monitorEnabled, syncMonitorRouting]);
+
+  useEffect(() => {
+    Tone.getTransport().loop = state.loop.loopEnabled;
+    Tone.getTransport().loopStart = state.loop.loopStart;
+    Tone.getTransport().loopEnd = state.loop.loopEnd;
+  }, [state.loop]);
+
+  useEffect(() => {
+    return () => {
+      mediaRecorderRef.current?.stop();
+      rawStreamRef.current?.getTracks().forEach((t) => t.stop());
+      try { monitorNodeRef.current?.disconnect(); } catch { /* ignore */ }
+    };
+  }, []);
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
@@ -73,6 +99,42 @@ export default function DAWView() {
     };
     dispatch({ type: "ADD_TRACK", payload: newTrack });
   };
+
+  const createRecordingTrack = useCallback((name?: string) => {
+    const trackId = crypto.randomUUID();
+    dispatch({
+      type: "ADD_TRACK",
+      payload: {
+        id: trackId,
+        name: name ?? `Record ${stateRef.current.tracks.length + 1}`,
+        color: TRACK_COLORS[stateRef.current.tracks.length % TRACK_COLORS.length],
+        muted: false,
+        volume: 80,
+      },
+    });
+    return trackId;
+  }, [dispatch]);
+
+  const ensureRecordTrack = useCallback((requestedTrackId?: string) => {
+    const currentState = stateRef.current;
+    const requestedTrack = requestedTrackId
+      ? currentState.tracks.find((track) => track.id === requestedTrackId)
+      : undefined;
+
+    if (requestedTrack && !requestedTrack.audioBlob && !currentState.blocks.some((block) => block.trackId === requestedTrack.id)) {
+      return requestedTrack.id;
+    }
+
+    const armedTrack = currentState.recording.armedTrackId
+      ? currentState.tracks.find((track) => track.id === currentState.recording.armedTrackId)
+      : undefined;
+
+    if (armedTrack && !armedTrack.audioBlob && !currentState.blocks.some((block) => block.trackId === armedTrack.id)) {
+      return armedTrack.id;
+    }
+
+    return createRecordingTrack(requestedTrack?.name ? `${requestedTrack.name} Take` : undefined);
+  }, [createRecordingTrack]);
 
   const handleUploadAudio = async (trackId: string, file: File) => {
     const blob = new Blob([file], { type: file.type });
@@ -104,6 +166,193 @@ export default function DAWView() {
       });
     }
   };
+
+  const handleUpdateTrack = useCallback((id: string, patch: Partial<DAWTrack>) => {
+    dispatch({ type: "UPDATE_TRACK", payload: { id, ...patch } });
+  }, [dispatch]);
+
+  const stopRecordingOnly = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+
+    if (activeRecordingRef.current) {
+      activeRecordingRef.current.stopSec = Tone.getTransport().seconds;
+    }
+    recorder.stop();
+  }, []);
+
+  const startRecording = useCallback(async (requestedTrackId?: string) => {
+    if (stateRef.current.recording.isRecording) return;
+
+    const trackId = ensureRecordTrack(requestedTrackId);
+
+    await toneEngine.init();
+
+    // Get the raw MediaStream directly — no Tone.UserMedia internals needed
+    if (!rawStreamRef.current || rawStreamRef.current.getTracks().every((t) => t.readyState === "ended")) {
+      rawStreamRef.current = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+    }
+    const mediaStream = rawStreamRef.current;
+    syncMonitorRouting();
+
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : "audio/webm";
+
+    chunksRef.current = [];
+    const recorder = new MediaRecorder(mediaStream, { mimeType });
+    mediaRecorderRef.current = recorder;
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        chunksRef.current.push(event.data);
+      }
+    };
+
+    recorder.onstop = async () => {
+      const activeRecording = activeRecordingRef.current;
+      mediaRecorderRef.current = null;
+
+      if (!activeRecording) {
+        dispatch({ type: "SET_RECORDING_STATE", payload: { isRecording: false, recordStartTime: null } });
+        return;
+      }
+
+      const blob = new Blob(chunksRef.current, { type: activeRecording.mimeType });
+      chunksRef.current = [];
+      activeRecordingRef.current = null;
+
+      let durationSec = Math.max(0.25, (activeRecording.stopSec ?? Tone.getTransport().seconds) - activeRecording.startSec);
+      try {
+        const arrayBuffer = await blob.arrayBuffer();
+        const audioContext = new AudioContext();
+        const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+        durationSec = decoded.duration;
+        await audioContext.close();
+      } catch {
+        // fall back to transport delta
+      }
+
+      const currentBpm = stateRef.current.transport.bpm;
+      const secondsPerMeasure = (4 * 60) / currentBpm;
+      const startMeasure = activeRecording.startSec / secondsPerMeasure + 1;
+      const durationMeasures = Math.max(0.25, Math.ceil((durationSec / secondsPerMeasure) * 4) / 4);
+      const file = new File([blob], `wonder-take-${Date.now()}.webm`, { type: activeRecording.mimeType });
+
+      dispatch({
+        type: "UPDATE_TRACK",
+        payload: {
+          id: activeRecording.trackId,
+          audioDurationSec: durationSec,
+        },
+      });
+      dispatch({ type: "LOAD_AUDIO", payload: { trackId: activeRecording.trackId, blob } });
+      dispatch({
+        type: "ADD_BLOCK",
+        payload: {
+          id: crypto.randomUUID(),
+          trackId: activeRecording.trackId,
+          name: `Take ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+          startMeasure,
+          durationMeasures,
+          color: stateRef.current.tracks.find((track) => track.id === activeRecording.trackId)?.color,
+        },
+      });
+      analyze(file);
+
+      dispatch({
+        type: "SET_RECORDING_STATE",
+        payload: {
+          isRecording: false,
+          recordStartTime: null,
+          armedTrackId: activeRecording.trackId,
+        },
+      });
+    };
+
+    if (!stateRef.current.transport.isPlaying) {
+      await startPlayback();
+    }
+
+    const recordStartTime = Tone.getTransport().seconds;
+    activeRecordingRef.current = {
+      trackId,
+      startSec: recordStartTime,
+      stopSec: null,
+      mimeType,
+    };
+    recorder.start(100);
+
+    dispatch({
+      type: "SET_RECORDING_STATE",
+      payload: {
+        isRecording: true,
+        armedTrackId: trackId,
+        recordStartTime,
+      },
+    });
+  }, [analyze, dispatch, ensureRecordTrack, startPlayback, syncMonitorRouting]);
+
+  const handleRecord = useCallback(() => {
+    if (stateRef.current.recording.isRecording) {
+      stopRecordingOnly();
+      return;
+    }
+
+    void startRecording();
+  }, [startRecording, stopRecordingOnly]);
+
+  const handleTrackRecord = useCallback((trackId: string) => {
+    if (stateRef.current.recording.isRecording) {
+      stopRecordingOnly();
+      return;
+    }
+
+    void startRecording(trackId);
+  }, [startRecording, stopRecordingOnly]);
+
+  const handleStop = useCallback(() => {
+    if (stateRef.current.recording.isRecording) {
+      stopRecordingOnly();
+      dispatch({
+        type: "SET_RECORDING_STATE",
+        payload: {
+          isRecording: false,
+          recordStartTime: null,
+        },
+      });
+    }
+    stopPlayback();
+  }, [dispatch, stopPlayback, stopRecordingOnly]);
+
+  // ─── Global spacebar play/pause ──────────────────────────────────────────────
+  // Mirrors Ableton's spacebar shortcut. Skips if focus is inside a text input.
+  const handleSpacebar = useCallback((e: KeyboardEvent) => {
+    if (e.code !== "Space") return;
+
+    const el = document.activeElement;
+    const tag = el?.tagName.toLowerCase() ?? "";
+    if (
+      tag === "input" ||
+      tag === "textarea" ||
+      (el as HTMLElement)?.isContentEditable
+    ) return;
+
+    e.preventDefault();
+
+    if (Tone.getTransport().state === "started") {
+      handleStop();
+    } else {
+      startPlayback();
+    }
+  }, [handleStop, startPlayback]);
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleSpacebar);
+    return () => window.removeEventListener("keydown", handleSpacebar);
+  }, [handleSpacebar]);
 
   // ─── Transport Bar (shared between empty and populated state) ───────────────
 
@@ -139,12 +388,30 @@ export default function DAWView() {
     <DAWTransportBar
       transport={state.transport}
       onPlay={startPlayback}
-      onStop={stopPlayback}
+      onStop={handleStop}
       onRewind={() => seekTo(1)}
       onBPMChange={(bpm) => dispatch({ type: "SET_TRANSPORT", payload: { bpm } })}
       onExport={exportToWAV}
       drumsOpen={drumsOpen}
       onToggleDrums={() => setDrumsOpen((v) => !v)}
+      onRecord={handleRecord}
+      isRecording={state.recording.isRecording}
+      loopEnabled={state.loop.loopEnabled}
+      onToggleLoop={() =>
+        dispatch({
+          type: "SET_LOOP_STATE",
+          payload: { loopEnabled: !state.loop.loopEnabled },
+        })
+      }
+      monitorEnabled={state.recording.monitorEnabled}
+      onToggleMonitor={() =>
+        dispatch({
+          type: "SET_RECORDING_STATE",
+          payload: { monitorEnabled: !state.recording.monitorEnabled },
+        })
+      }
+      mixerOpen={mixerOpen}
+      onToggleMixer={() => setMixerOpen((value) => !value)}
     />
   );
 
@@ -208,17 +475,21 @@ export default function DAWView() {
         <DAWTrackList
           tracks={state.tracks}
           blocks={state.blocks}
+          recordingTrackId={state.recording.armedTrackId}
+          isRecording={state.recording.isRecording}
           onAddTrack={handleAddTrack}
-          onUpdateTrack={(id, patch) =>
-            dispatch({ type: "UPDATE_TRACK", payload: { id, ...patch } })
-          }
+          onUpdateTrack={handleUpdateTrack}
           onDeleteTrack={(id) => dispatch({ type: "DELETE_TRACK", payload: id })}
           onUploadAudio={handleUploadAudio}
+          onRecordTrack={handleTrackRecord}
         />
         <DAWTimeline
           transport={state.transport}
           tracks={state.tracks}
           blocks={state.blocks}
+          recording={state.recording}
+          loop={state.loop}
+          gridSize={state.gridSize}
           selectedBlockId={state.selectedBlockId}
           onSeek={seekTo}
           onUpdateBlock={(id, patch) =>
@@ -227,11 +498,26 @@ export default function DAWView() {
           onDeleteBlock={(id) =>
             dispatch({ type: "DELETE_BLOCK", payload: id })
           }
+          onAddBlock={(block) =>
+            dispatch({ type: "ADD_BLOCK", payload: block })
+          }
           onSelectBlock={(id) =>
             dispatch({ type: "SET_SELECTED_BLOCK", payload: id })
           }
+          onLoopChange={(patch) =>
+            dispatch({ type: "SET_LOOP_STATE", payload: patch })
+          }
+          onGridSizeChange={(gridSize) =>
+            dispatch({ type: "SET_GRID_SIZE", payload: gridSize })
+          }
         />
       </div>
+      <MixerDrawer
+        open={mixerOpen}
+        tracks={state.tracks}
+        onClose={() => setMixerOpen(false)}
+        onUpdateTrack={handleUpdateTrack}
+      />
       {drumRack}
       {analysisBadge}
       {transportBar}

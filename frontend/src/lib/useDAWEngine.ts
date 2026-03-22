@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useCallback } from "react";
+import * as Tone from "tone";
 import type { DAWState, DAWTransport } from "@/types";
 import { toneEngine } from "./toneEngine";
+import { volumePercentToDb } from "./mixUtils";
 
 // ─── WAV Encoder ──────────────────────────────────────────────────────────────
 
@@ -90,6 +92,7 @@ export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineR
     loadedBlobsRef.current.forEach((_, trackId) => {
       if (!validIds.has(trackId)) {
         loadedBlobsRef.current.delete(trackId);
+        toneEngine.removeStem(trackId);
       }
     });
 
@@ -105,22 +108,80 @@ export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineR
         const loopConfig = track.loop
           ? { loop: true, durationSeconds: track.loopDurationSec }
           : undefined;
-        toneEngine.loadStemFromBlob(track.id, track.name, track.audioBlob, loopConfig).catch(() => {
-          console.warn(`[useDAWEngine] Failed to load stem: ${track.name}`);
+        toneEngine.loadStemFromBlob(track.id, track.name, track.audioBlob, loopConfig)
+          .then(() => {
+            const durationSec = toneEngine.getStemDuration(track.id);
+            if (
+              typeof durationSec === "number" &&
+              Number.isFinite(durationSec) &&
+              Math.abs((stateRef.current.tracks.find((t) => t.id === track.id)?.audioDurationSec ?? 0) - durationSec) > 0.01
+            ) {
+              dispatch({
+                type: "UPDATE_TRACK",
+                payload: { id: track.id, audioDurationSec: durationSec },
+              });
+            }
+          })
+          .catch(() => {
+            console.warn(`[useDAWEngine] Failed to load stem: ${track.name}`);
+          });
+      }
+
+      const durationSec = toneEngine.getStemDuration(track.id);
+      if (
+        typeof durationSec === "number" &&
+        Number.isFinite(durationSec) &&
+        Math.abs((track.audioDurationSec ?? 0) - durationSec) > 0.01
+      ) {
+        dispatch({
+          type: "UPDATE_TRACK",
+          payload: { id: track.id, audioDurationSec: durationSec },
         });
       }
 
       // Sync volume/mute
       if (toneEngine.isReady()) {
-        const db = track.muted ? -Infinity : (track.volume / 100) * 12 - 12; // 0-100 → -12dB to 0dB
+        const db = track.volumeDb ?? volumePercentToDb(track.volume);
         toneEngine.setStemVolume(track.id, db);
+        toneEngine.setStemPan(track.id, track.pan ?? 0);
         toneEngine.muteStem(track.id, track.muted);
+        toneEngine.setStemSolo(track.id, track.solo ?? false);
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.tracks]);
+  }, [dispatch, state.tracks]);
 
   // ─── startPlayback ──────────────────────────────────────────────────────────
+
+  const ensureTrackStemsLoaded = useCallback(async (): Promise<void> => {
+    const currentTracks = stateRef.current.tracks;
+    await Promise.all(
+      currentTracks.map(async (track) => {
+        if (!track.audioBlob) return;
+
+        const fingerprint = `${track.audioBlob.size}-${track.audioBlob.type}`;
+        const prev = loadedBlobsRef.current.get(track.id);
+        if (prev === fingerprint) return;
+
+        loadedBlobsRef.current.set(track.id, fingerprint);
+        const loopConfig = track.loop
+          ? { loop: true, durationSeconds: track.loopDurationSec }
+          : undefined;
+
+        await toneEngine.loadStemFromBlob(track.id, track.name, track.audioBlob, loopConfig);
+        const durationSec = toneEngine.getStemDuration(track.id);
+        if (
+          typeof durationSec === "number" &&
+          Number.isFinite(durationSec) &&
+          Math.abs((stateRef.current.tracks.find((t) => t.id === track.id)?.audioDurationSec ?? 0) - durationSec) > 0.01
+        ) {
+          dispatch({
+            type: "UPDATE_TRACK",
+            payload: { id: track.id, audioDurationSec: durationSec },
+          });
+        }
+      }),
+    );
+  }, [dispatch]);
 
   const startPlayback = useCallback(async (): Promise<void> => {
     if (stateRef.current.transport.isPlaying) return;
@@ -128,16 +189,34 @@ export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineR
     // Ensure toneEngine is initialized (handles Tone.start() for user gesture)
     await toneEngine.init();
     toneEngine.setBPM(stateRef.current.transport.bpm);
+    await ensureTrackStemsLoaded();
 
-    // Start all loaded stems synced to the Transport at their block's position.
-    // secondsPerMeasure = (60 / bpm) * 4  (4 beats per measure in 4/4)
+    // Start all loaded stems synced to the Transport at their block positions.
+    // Each track may have >1 block after razor-slicing; schedule all of them
+    // by stacking multiple .start() calls on the same synced player.
     const secondsPerMeasure = (60 / stateRef.current.transport.bpm) * 4;
+
+    // Group blocks by trackId so we can detect multi-block tracks
+    const blocksByTrack = new Map<string, typeof stateRef.current.blocks>();
+    stateRef.current.blocks.forEach((b) => {
+      const arr = blocksByTrack.get(b.trackId) ?? [];
+      arr.push(b);
+      blocksByTrack.set(b.trackId, arr);
+    });
+
     stateRef.current.tracks.forEach((track) => {
-      if (track.audioBlob && !track.muted) {
-        const block = stateRef.current.blocks.find((b) => b.trackId === track.id);
-        const transportStartSec = block ? (block.startMeasure - 1) * secondsPerMeasure : 0;
-        toneEngine.playStem(track.id, transportStartSec);
-      }
+      if (!track.audioBlob || track.muted) return;
+      const blocks = blocksByTrack.get(track.id);
+      if (!blocks || blocks.length === 0) return;
+
+      // Sort ascending so the first block triggers the unsync/resync
+      const sorted = [...blocks].sort((a, b) => a.startMeasure - b.startMeasure);
+      sorted.forEach((block, i) => {
+        const transportStartSec = (block.startMeasure - 1) * secondsPerMeasure;
+        const durationSec       = block.durationMeasures * secondsPerMeasure;
+        const bufferOffsetSec   = block.bufferOffsetSec ?? 0;
+        toneEngine.playStem(track.id, transportStartSec, bufferOffsetSec, durationSec, i === 0);
+      });
     });
 
     // Start Tone.Transport
@@ -145,23 +224,23 @@ export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineR
 
     dispatch({ type: "SET_TRANSPORT", payload: { isPlaying: true } as Partial<DAWTransport> });
 
-    // Tick interval to update React state (playhead position)
-    const tickMs = (60 / stateRef.current.transport.bpm / 4) * 1000;
+    // Tick interval: poll Tone.Transport position directly so the playhead
+    // never drifts from the audio engine regardless of timer jitter.
     intervalRef.current = setInterval(() => {
       const s = stateRef.current;
-      const prev = currentMeasureRef.current;
-      const newMeasure = prev + 0.25;
+      const transportSec = Tone.getTransport().seconds;
+      const rawMeasure = transportSec / secondsPerMeasure + 1;
 
       // Loop at totalMeasures
-      const nextMeasure = newMeasure >= s.transport.totalMeasures ? 1 : newMeasure;
+      const nextMeasure = rawMeasure >= s.transport.totalMeasures ? 1 : rawMeasure;
       currentMeasureRef.current = nextMeasure;
 
       dispatch({
         type: "SET_TRANSPORT",
         payload: { currentMeasure: nextMeasure } as Partial<DAWTransport>,
       });
-    }, tickMs);
-  }, [dispatch]);
+    }, 50); // 50ms poll — tight enough for smooth playhead, cheap enough to not stutter
+  }, [dispatch, ensureTrackStemsLoaded]);
 
   // ─── stopPlayback ───────────────────────────────────────────────────────────
 
@@ -191,6 +270,10 @@ export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineR
     dispatch({ type: "SET_TRANSPORT", payload: { currentMeasure: measure } as Partial<DAWTransport> });
     if (wasPlaying) {
       setTimeout(() => startPlayback(), 0);
+    } else {
+      // Move rAF playhead to the seek point without starting transport
+      const spm = (60 / stateRef.current.transport.bpm) * 4;
+      Tone.getTransport().seconds = (measure - 1) * spm;
     }
   }, [dispatch, stopPlayback, startPlayback]);
 

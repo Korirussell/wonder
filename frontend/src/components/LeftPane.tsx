@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import * as Tone from "tone";
 import {
   MessageSquare,
@@ -35,11 +35,39 @@ interface LocalFolder {
   samples: LocalSample[];
 }
 
+interface CloudSample {
+  id: string;
+  name: string;
+  url: string;
+  tags: string[];
+}
+
+type BrowseMode = "local" | "cloud";
+
+const TRACK_COLORS = ["#C1E1C1", "#FEF08A", "#BAE6FD", "#FBCFE8", "#E9D5FF"];
+
 const AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".ogg", ".flac", ".aac", ".m4a", ".aif", ".aiff"]);
 
 function isAudioFile(name: string) {
   const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
   return AUDIO_EXTENSIONS.has(ext);
+}
+
+async function createArrangementBlock(
+  blob: Blob,
+  bpm: number,
+  fallbackMeasures = 4,
+): Promise<number> {
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioContext = new AudioContext();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    await audioContext.close();
+    const secondsPerMeasure = (4 * 60) / bpm;
+    return Math.max(1, Math.ceil(audioBuffer.duration / secondsPerMeasure));
+  } catch {
+    return fallbackMeasures;
+  }
 }
 
 // ─── Preview button ────────────────────────────────────────────────────────────
@@ -85,18 +113,14 @@ function PreviewButton({ audioUrl, name }: { audioUrl: string; name: string }) {
 // ─── Single sample row ─────────────────────────────────────────────────────────
 
 function SampleRow({
-  id,
   name,
   audioUrl,
   tags,
-  createdAt,
   onInfo,
 }: {
-  id: string;
   name: string;
   audioUrl: string;
   tags?: string[];
-  createdAt?: number;
   onInfo: () => void;
 }) {
   return (
@@ -124,10 +148,63 @@ function SampleRow({
   );
 }
 
+function CloudSampleSkeletonRow() {
+  return (
+    <div className="animate-pulse border-2 border-[#1A1A1A] bg-[#ECECE6] px-3 py-3 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+      <div className="h-3 w-32 bg-[#D2D2CA] border border-[#1A1A1A]" />
+      <div className="mt-2 flex gap-2">
+        <div className="h-5 w-14 bg-[#DCDCD4] border border-[#1A1A1A]" />
+        <div className="h-5 w-16 bg-[#DCDCD4] border border-[#1A1A1A]" />
+      </div>
+    </div>
+  );
+}
+
+function CloudSampleRow({
+  sample,
+  loading,
+  onLoad,
+}: {
+  sample: CloudSample;
+  loading: boolean;
+  onLoad: () => void;
+}) {
+  const disabled = loading || !sample.url;
+
+  return (
+    <div className="border-2 border-[#1A1A1A] bg-[#FDFDFB] px-3 py-3 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-[11px] font-bold uppercase tracking-wider text-[#1A1A1A] truncate">
+            {sample.name}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {sample.tags.map((tag) => (
+              <span
+                key={`${sample.id}-${tag}`}
+                className="border-2 border-[#1A1A1A] bg-[#F3F2ED] px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-[#1A1A1A]"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <button
+          onClick={onLoad}
+          disabled={disabled}
+          className="flex-shrink-0 border-2 border-[#1A1A1A] bg-[#C1E1C1] px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-wider text-[#1A1A1A] shadow-[3px_3px_0px_0px_rgba(26,26,26,1)] transition-transform hover:-translate-y-0.5 disabled:translate-y-0 disabled:bg-[#E6E5DF] disabled:shadow-none"
+        >
+          {loading ? "Loading" : sample.url ? "Load" : "Missing URL"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Folder accordion ──────────────────────────────────────────────────────────
 
 function FolderAccordion({
-  id,
   label,
   count,
   icon: Icon,
@@ -136,7 +213,6 @@ function FolderAccordion({
   onToggle,
   children,
 }: {
-  id: string;
   label: string;
   count: number;
   icon: React.ElementType;
@@ -184,8 +260,15 @@ function FolderAccordion({
 // ─── Browse Tab ────────────────────────────────────────────────────────────────
 
 function BrowseTab() {
-  const { state } = useDAWContext();
+  const { state, dispatch } = useDAWContext();
   const aiSamples = state.sampleLibrary;
+  const [browseMode, setBrowseMode] = useState<BrowseMode>("local");
+  const [cloudSamples, setCloudSamples] = useState<CloudSample[]>([]);
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const [hasFetchedCloud, setHasFetchedCloud] = useState(false);
+  const [loadingSampleId, setLoadingSampleId] = useState<string | null>(null);
+  const [cloudToastVisible, setCloudToastVisible] = useState(false);
 
   // Local folder state — lives entirely in the browser, no backend
   const [localFolders, setLocalFolders] = useState<LocalFolder[]>([]);
@@ -201,7 +284,11 @@ function BrowseTab() {
   const toggleFolder = (id: string) =>
     setOpenFolders((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
 
@@ -246,78 +333,238 @@ function BrowseTab() {
     createdAt: s.createdAt,
   });
 
+  useEffect(() => {
+    if (browseMode !== "cloud" || hasFetchedCloud) return;
+
+    const controller = new AbortController();
+
+    const fetchCloudSamples = async () => {
+      setCloudLoading(true);
+      setCloudError(null);
+
+      try {
+        const resp = await fetch("/api/cloud-samples", {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        if (!resp.ok) {
+          throw new Error(`Cloud fetch failed (${resp.status})`);
+        }
+
+        const rawData = (await resp.json()) as Array<Partial<CloudSample>>;
+        const data = rawData.map((sample, index) => ({
+          id: sample.id ?? `cloud-${index}`,
+          name: sample.name ?? "Untitled Sample",
+          url: sample.url ?? "",
+          tags: Array.isArray(sample.tags) ? sample.tags : [],
+        }));
+        startTransition(() => {
+          setCloudSamples(data);
+          setHasFetchedCloud(true);
+        });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setCloudError(error instanceof Error ? error.message : "Unable to fetch cloud samples");
+      } finally {
+        if (!controller.signal.aborted) {
+          setCloudLoading(false);
+        }
+      }
+    };
+
+    void fetchCloudSamples();
+
+    return () => controller.abort();
+  }, [browseMode, hasFetchedCloud]);
+
+  const handleLoadCloudSample = async (sample: CloudSample) => {
+    setLoadingSampleId(sample.id);
+    setCloudToastVisible(true);
+
+    try {
+      const response = await fetch(sample.url);
+      if (!response.ok) {
+        throw new Error(`Sample download failed (${response.status})`);
+      }
+
+      const blob = await response.blob();
+      const trackId = crypto.randomUUID();
+      const color = TRACK_COLORS[state.tracks.length % TRACK_COLORS.length];
+      const durationMeasures = await createArrangementBlock(blob, state.transport.bpm);
+
+      dispatch({
+        type: "ADD_TRACK",
+        payload: {
+          id: trackId,
+          name: sample.name,
+          color,
+          muted: false,
+          volume: 80,
+        },
+      });
+      dispatch({ type: "LOAD_AUDIO", payload: { trackId, blob } });
+      dispatch({
+        type: "ADD_BLOCK",
+        payload: {
+          id: crypto.randomUUID(),
+          trackId,
+          name: sample.name,
+          startMeasure: 1,
+          durationMeasures,
+          color,
+        },
+      });
+
+      await toneSafeLoaded();
+    } catch (error) {
+      console.error("Cloud sample load failed:", error);
+    } finally {
+      setLoadingSampleId(null);
+      setCloudToastVisible(false);
+    }
+  };
+
   return (
     <>
-      <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-3 custom-scrollbar">
-
-        {/* ── AI Generated folder ─────────────────────────────────────────── */}
-        <FolderAccordion
-          id="ai-generated"
-          label="AI Generated"
-          count={aiSamples.length}
-          icon={Sparkles}
-          accent="#C1E1C1"
-          open={openFolders.has("ai-generated")}
-          onToggle={() => toggleFolder("ai-generated")}
-        >
-          {aiSamples.map((entry) => (
-            <SampleRow
-              key={entry.id}
-              id={entry.id}
-              name={entry.name}
-              audioUrl={entry.audioUrl}
-              tags={entry.tags}
-              createdAt={entry.createdAt}
-              onInfo={() => setInspectedSample(entry)}
-            />
-          ))}
-        </FolderAccordion>
-
-        {/* ── Local folders ────────────────────────────────────────────────── */}
-        {localFolders.map((folder) => (
-          <FolderAccordion
-            key={folder.id}
-            id={folder.id}
-            label={folder.name}
-            count={folder.samples.length}
-            icon={FolderOpen}
-            open={openFolders.has(folder.id)}
-            onToggle={() => toggleFolder(folder.id)}
+      <div className="relative flex flex-1 flex-col overflow-hidden">
+        <div className="flex items-center gap-2 border-b-2 border-[#1A1A1A] bg-[#F3F2ED] px-3 py-3">
+          <button
+            onClick={() => setBrowseMode("local")}
+            className={`border-2 border-[#1A1A1A] px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-[0.18em] shadow-[3px_3px_0px_0px_rgba(26,26,26,1)] transition-transform hover:-translate-y-0.5 ${
+              browseMode === "local" ? "bg-white text-[#1A1A1A]" : "bg-[#ECEBE5] text-[#1A1A1A]/55 shadow-none"
+            }`}
           >
-            {folder.samples.map((s) => (
-              <SampleRow
-                key={s.id}
-                id={s.id}
-                name={s.name}
-                audioUrl={s.audioUrl}
-                onInfo={() => setInspectedSample(localToEntry(s))}
-              />
-            ))}
-          </FolderAccordion>
-        ))}
+            Local
+          </button>
+          <button
+            onClick={() => setBrowseMode("cloud")}
+            className={`border-2 border-[#1A1A1A] px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-[0.18em] shadow-[3px_3px_0px_0px_rgba(26,26,26,1)] transition-transform hover:-translate-y-0.5 ${
+              browseMode === "cloud" ? "bg-[#C1E1C1] text-[#1A1A1A]" : "bg-white text-[#1A1A1A]/55 shadow-none"
+            }`}
+          >
+            Cloud
+          </button>
+        </div>
 
-        {/* ── Add Local Folder button ──────────────────────────────────────── */}
-        <button
-          onClick={handleAddFolder}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2.5 border-2 border-dashed border-[#1A1A1A]/30 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider text-[#1A1A1A] transition-all hover:border-[#1A1A1A] hover:shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
-          style={{ background: "#C1E1C1" }}
-        >
-          <FolderPlus size={13} strokeWidth={2.5} />
-          Add Local Folder
-        </button>
+        <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-3 custom-scrollbar">
+          {browseMode === "local" ? (
+            <>
+              <FolderAccordion
+                label="AI Generated"
+                count={aiSamples.length}
+                icon={Sparkles}
+                accent="#C1E1C1"
+                open={openFolders.has("ai-generated")}
+                onToggle={() => toggleFolder("ai-generated")}
+              >
+                {aiSamples.map((entry) => (
+                  <SampleRow
+                    key={entry.id}
+                    name={entry.name}
+                    audioUrl={entry.audioUrl}
+                    tags={entry.tags}
+                    onInfo={() => setInspectedSample(entry)}
+                  />
+                ))}
+              </FolderAccordion>
 
-        {/* ── Hidden directory file input ──────────────────────────────────── */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          // @ts-expect-error — non-standard but widely supported
-          webkitdirectory=""
-          directory=""
-          multiple
-          className="hidden"
-          accept=".wav,.mp3,.ogg,.flac,.aac,.m4a,.aif,.aiff"
-          onChange={handleFileChange}
-        />
+              {localFolders.map((folder) => (
+                <FolderAccordion
+                  key={folder.id}
+                  label={folder.name}
+                  count={folder.samples.length}
+                  icon={FolderOpen}
+                  open={openFolders.has(folder.id)}
+                  onToggle={() => toggleFolder(folder.id)}
+                >
+                  {folder.samples.map((s) => (
+                    <SampleRow
+                      key={s.id}
+                      name={s.name}
+                      audioUrl={s.audioUrl}
+                      onInfo={() => setInspectedSample(localToEntry(s))}
+                    />
+                  ))}
+                </FolderAccordion>
+              ))}
+
+              <button
+                onClick={handleAddFolder}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2.5 border-2 border-dashed border-[#1A1A1A]/30 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider text-[#1A1A1A] transition-all hover:border-[#1A1A1A] hover:shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
+                style={{ background: "#C1E1C1" }}
+              >
+                <FolderPlus size={13} strokeWidth={2.5} />
+                Add Local Folder
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="border-2 border-[#1A1A1A] bg-[#F7F6F1] px-3 py-2 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+                <p className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[#1A1A1A]">
+                  Atlas Cloud Library
+                </p>
+                <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.12em] text-[#1A1A1A]/55">
+                  Load curated samples directly into the arrangement
+                </p>
+              </div>
+
+              {cloudLoading ? (
+                <>
+                  <CloudSampleSkeletonRow />
+                  <CloudSampleSkeletonRow />
+                  <CloudSampleSkeletonRow />
+                </>
+              ) : null}
+
+              {!cloudLoading && cloudError ? (
+                <div className="border-2 border-[#1A1A1A] bg-[#FEF3C7] px-3 py-3 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+                  {cloudError}
+                </div>
+              ) : null}
+
+              {!cloudLoading && !cloudError && cloudSamples.length === 0 ? (
+                <div className="border-2 border-[#1A1A1A] bg-white px-3 py-6 text-center shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+                  <p className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[#1A1A1A]/50">
+                    No cloud samples found
+                  </p>
+                </div>
+              ) : null}
+
+              {!cloudLoading && !cloudError
+                ? cloudSamples.map((sample) => (
+                    <CloudSampleRow
+                      key={sample.id}
+                      sample={sample}
+                      loading={loadingSampleId === sample.id}
+                      onLoad={() => void handleLoadCloudSample(sample)}
+                    />
+                  ))
+                : null}
+            </>
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            // @ts-expect-error — non-standard but widely supported
+            webkitdirectory=""
+            directory=""
+            multiple
+            className="hidden"
+            accept=".wav,.mp3,.ogg,.flac,.aac,.m4a,.aif,.aiff"
+            onChange={handleFileChange}
+          />
+        </div>
+
+        {cloudToastVisible && (
+          <div className="pointer-events-none absolute bottom-3 right-3 border-2 border-[#1A1A1A] bg-[#FDFDFB] px-3 py-2 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+            <p className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-[#1A1A1A]">
+              Downloading from Cloud...
+            </p>
+          </div>
+        )}
       </div>
 
       {/* ── Analysis modal (portal) ──────────────────────────────────────────── */}
@@ -329,6 +576,13 @@ function BrowseTab() {
       )}
     </>
   );
+}
+
+async function toneSafeLoaded() {
+  await new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+  await Tone.loaded();
 }
 
 // ─── Left Pane ────────────────────────────────────────────────────────────────

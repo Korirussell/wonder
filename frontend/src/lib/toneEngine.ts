@@ -55,6 +55,20 @@ class ToneEngine {
   private metronome: Tone.Synth | null = null;
   private metronomeEnabled = false;
 
+  // ─── Guitar Amp Chain ─────────────────────────────────────────────────────
+  private amp: {
+    input:      Tone.UserMedia;
+    gain:       Tone.Gain;
+    distortion: Tone.Distortion;
+    eq:         Tone.EQ3;
+    cab:        Tone.Filter;       // cabinet hi-cut simulation
+    reverb:     Tone.Reverb;       // spring reverb
+    volume:     Tone.Volume;
+    meter:      Tone.Meter;
+    waveform:   Tone.Waveform;
+  } | null = null;
+  private ampActive = false;
+
   // ─── Init ──────────────────────────────────────────────────────────────────
 
   async init(): Promise<void> {
@@ -119,7 +133,11 @@ class ToneEngine {
   async loadDrumSample(slot: DrumSlot, url: string, name?: string): Promise<void> {
     if (!this.initialized) await this.init();
 
-    const player = new Tone.Player(url).connect(this.masterVolume!);
+    const player = new Tone.Player({
+      url,
+      loop: false,
+      autostart: false,
+    }).connect(this.masterVolume!);
     await Tone.loaded();
 
     if (this.drumKit[slot]) {
@@ -222,6 +240,7 @@ class ToneEngine {
     const player = new Tone.Player({
       url,
       loop: shouldLoop,
+      autostart: false,
       onload: () => {
         if (shouldLoop) {
           player.loopStart = 0;
@@ -246,11 +265,39 @@ class ToneEngine {
     await this.loadStem(id, name, url, loopConfig);
   }
 
-  playStem(id: string, transportStartSec = 0): void {
+  removeStem(id: string): void {
     const stem = this.stems.get(id);
-    if (stem && stem.player.loaded) {
-      stem.player.sync().start(transportStartSec);
+    if (!stem) return;
+    stem.player.dispose();
+    stem.eq.dispose();
+    stem.reverb.dispose();
+    stem.channel.dispose();
+    this.stems.delete(id);
+  }
+
+  /**
+   * Schedule a stem to play at a specific transport position.
+   * @param id          Stem / track ID
+   * @param transportStartSec  When (in transport seconds) this block starts
+   * @param bufferOffsetSec    Where in the audio file to begin (0 = from beginning)
+   * @param durationSec        How many seconds to play before stopping (undefined = until EOF)
+   * @param firstBlock         Pass `false` for 2nd+ blocks on the same track — skips unsync/resync
+   *                           so multiple .start() calls stack on the same synced player
+   */
+  playStem(
+    id: string,
+    transportStartSec = 0,
+    bufferOffsetSec = 0,
+    durationSec?: number,
+    firstBlock = true,
+  ): void {
+    const stem = this.stems.get(id);
+    if (!stem || !stem.player.loaded) return;
+    if (firstBlock) {
+      stem.player.unsync();
+      stem.player.sync();
     }
+    stem.player.start(transportStartSec, bufferOffsetSec, durationSec);
   }
 
   stopStem(id: string): void {
@@ -264,6 +311,21 @@ class ToneEngine {
   setStemVolume(id: string, db: number): void {
     const stem = this.stems.get(id);
     if (stem) stem.channel.volume.value = db;
+  }
+
+  rampStemVolume(id: string, db: number, seconds: number): void {
+    const stem = this.stems.get(id);
+    if (stem) stem.channel.volume.rampTo(db, seconds);
+  }
+
+  setStemPan(id: string, pan: number): void {
+    const stem = this.stems.get(id);
+    if (stem) stem.channel.pan.value = pan;
+  }
+
+  rampStemPan(id: string, pan: number, seconds: number): void {
+    const stem = this.stems.get(id);
+    if (stem) stem.channel.pan.rampTo(pan, seconds);
   }
 
   muteStem(id: string, muted: boolean): void {
@@ -289,11 +351,21 @@ class ToneEngine {
     if (stem) stem.reverb.wet.value = Math.max(0, Math.min(1, wet));
   }
 
+  getStemDuration(id: string): number | null {
+    const stem = this.stems.get(id);
+    if (!stem || !stem.player.loaded) return null;
+    return stem.player.buffer.duration;
+  }
+
   // ─── One-Shot Player ──────────────────────────────────────────────────────
 
   async playOneShot(url: string): Promise<void> {
     if (!this.initialized) await this.init();
-    const player = new Tone.Player(url).connect(this.masterVolume!);
+    const player = new Tone.Player({
+      url,
+      loop: false,
+      autostart: false,
+    }).connect(this.masterVolume!);
     await Tone.loaded();
     player.start();
     player.onstop = () => player.dispose();
@@ -301,7 +373,17 @@ class ToneEngine {
 
   async playOneShotFromBlob(blob: Blob): Promise<void> {
     const url = URL.createObjectURL(blob);
-    await this.playOneShot(url);
+    const player = new Tone.Player({
+      url,
+      loop: false,
+      autostart: false,
+    }).connect(this.masterVolume!);
+    await Tone.loaded();
+    player.start();
+    player.onstop = () => {
+      player.dispose();
+      URL.revokeObjectURL(url);
+    };
   }
 
   // ─── Visualizer Data ──────────────────────────────────────────────────────
@@ -328,9 +410,94 @@ class ToneEngine {
     if (this.masterVolume) this.masterVolume.volume.value = db;
   }
 
+  // ─── Guitar Amp Methods ────────────────────────────────────────────────────
+
+  async startAmp(): Promise<void> {
+    if (!this.initialized) await this.init();
+    if (this.ampActive) return;
+
+    const input      = new Tone.UserMedia();
+    await input.open();   // triggers browser mic/instrument permission prompt
+
+    const gain       = new Tone.Gain(1);
+    const distortion = new Tone.Distortion(0);
+    const eq         = new Tone.EQ3(0, 0, 0);
+    const cab        = new Tone.Filter({ frequency: 5000, type: "lowpass", rolloff: -24 });
+    const reverb     = new Tone.Reverb({ decay: 1.8 });
+    reverb.wet.value = 0;
+    await reverb.generate();
+    const volume   = new Tone.Volume(-6);
+    const meter    = new Tone.Meter();
+    const waveform = new Tone.Waveform(512);
+
+    // Signal chain: input → gain → distortion → EQ → cab → reverb → volume → master
+    input.connect(gain);
+    gain.connect(distortion);
+    distortion.connect(eq);
+    eq.connect(cab);
+    cab.connect(reverb);
+    reverb.connect(volume);
+    volume.connect(this.masterVolume!);
+    volume.connect(meter);
+    volume.connect(waveform);
+
+    this.amp       = { input, gain, distortion, eq, cab, reverb, volume, meter, waveform };
+    this.ampActive = true;
+    console.log("[ToneEngine] Amp started");
+  }
+
+  stopAmp(): void {
+    if (!this.amp) return;
+    try { this.amp.input.close(); } catch { /* ignore */ }
+    this.amp.gain.dispose();
+    this.amp.distortion.dispose();
+    this.amp.eq.dispose();
+    this.amp.cab.dispose();
+    this.amp.reverb.dispose();
+    this.amp.volume.dispose();
+    this.amp.meter.dispose();
+    this.amp.waveform.dispose();
+    this.amp       = null;
+    this.ampActive = false;
+    console.log("[ToneEngine] Amp stopped");
+  }
+
+  setAmpGain(v: number): void {          // 0.5–8 preamp gain
+    if (this.amp) this.amp.gain.gain.value = v;
+  }
+  setAmpDistortion(v: number): void {    // 0–1 overdrive amount
+    if (this.amp) this.amp.distortion.distortion = v;
+  }
+  setAmpEQ(low: number, mid: number, high: number): void {  // dB each
+    if (!this.amp) return;
+    this.amp.eq.low.value  = low;
+    this.amp.eq.mid.value  = mid;
+    this.amp.eq.high.value = high;
+  }
+  setAmpPresence(freq: number): void {   // cab sim cutoff 2 000–9 000 Hz
+    if (this.amp) this.amp.cab.frequency.value = freq;
+  }
+  setAmpReverb(wet: number): void {      // 0–1
+    if (this.amp) this.amp.reverb.wet.value = Math.max(0, Math.min(1, wet));
+  }
+  setAmpMasterVolume(db: number): void { // −30–0 dB
+    if (this.amp) this.amp.volume.volume.value = db;
+  }
+  getAmpMeterValue(): number {
+    if (!this.amp) return -Infinity;
+    const v = this.amp.meter.getValue();
+    return typeof v === "number" ? v : -Infinity;
+  }
+  getAmpWaveform(): Float32Array {
+    if (!this.amp) return new Float32Array(512);
+    return this.amp.waveform.getValue();
+  }
+  isAmpActive(): boolean { return this.ampActive; }
+
   // ─── Cleanup ──────────────────────────────────────────────────────────────
 
   dispose(): void {
+    this.stopAmp();
     this.drumSequence?.dispose();
     Object.values(this.drumKit).forEach((p) => p?.dispose());
     this.stems.forEach((s) => {

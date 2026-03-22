@@ -75,6 +75,108 @@ body {
   animation: record-pulse 1.2s ease-in-out infinite;
 }
 
+@keyframes ghost-pulse {
+  0%, 100% { opacity: 0.95; }
+  50% { opacity: 0.7; }
+}
+
+.recording-ghost-clip {
+  animation: ghost-pulse 1s ease-in-out infinite;
+  background-image:
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255,255,255,0.08) 0px,
+      rgba(255,255,255,0.08) 8px,
+      rgba(26,26,26,0.08) 8px,
+      rgba(26,26,26,0.08) 16px
+    );
+}
+
+@keyframes wonder-ai-aura-breathe {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.008);
+  }
+}
+
+.wonder-ai-aura {
+  animation: wonder-ai-aura-breathe 2.8s ease-in-out infinite;
+  transition: opacity 220ms ease;
+}
+
+/* Transient-triggered header bounce (single-shot, fires on loud hits only) */
+@keyframes wonder-transient-bounce {
+  0%   { transform: scaleY(1); }
+  25%  { transform: scaleY(1.022); }
+  55%  { transform: scaleY(0.993); }
+  80%  { transform: scaleY(1.006); }
+  100% { transform: scaleY(1); }
+}
+
+.wonder-transient-bounce {
+  animation: wonder-transient-bounce 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) forwards;
+}
+
+/* Full-screen rumble (single-shot, fires on loud transients only) */
+@keyframes wonder-screen-rumble {
+  0%   { transform: translate(0, 0) rotate(0deg); }
+  15%  { transform: translate(-4px, 2px) rotate(-0.2deg); }
+  30%  { transform: translate(4px, -2px) rotate(0.2deg); }
+  45%  { transform: translate(-3px, 1px) rotate(-0.15deg); }
+  60%  { transform: translate(3px, -1px) rotate(0.15deg); }
+  75%  { transform: translate(-1px, 1px) rotate(-0.05deg); }
+  90%  { transform: translate(1px, -0.5px) rotate(0.05deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+.wonder-screen-rumble {
+  animation: wonder-screen-rumble 0.42s cubic-bezier(0.36, 0.07, 0.19, 0.97) forwards;
+}
+
+.wonder-shell :where(button, input:not([type="range"]), textarea, select):focus-visible {
+  outline: 2px solid #1A1A1A;
+  outline-offset: 2px;
+}
+
+.wonder-shell button:not([disabled]) {
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+
+@media (hover: hover) {
+  .wonder-shell button:not([disabled]):hover {
+    transform: translateY(-2px);
+    box-shadow: 6px 6px 0px 0px rgba(26,26,26,1);
+  }
+}
+
+.wonder-shell button:not([disabled]):active {
+  transform: translateY(1px);
+  box-shadow: 3px 3px 0px 0px rgba(26,26,26,1);
+}
+
+.wonder-shell :where(.rounded, .rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl) {
+  border-radius: 2px !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wonder-ai-aura,
+  .wonder-transient-bounce,
+  .wonder-screen-rumble,
+  .recording-pulse,
+  .recording-ghost-clip {
+    animation: none !important;
+  }
+}
+
 /* Clip block hover lift */
 .clip-block {
   transition: box-shadow 120ms ease, transform 120ms ease;
