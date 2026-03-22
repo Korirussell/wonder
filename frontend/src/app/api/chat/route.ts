@@ -12,134 +12,297 @@ import {
 } from "@/lib/sessionState";
 import { validateBeforeExecution } from "@/lib/musicValidator";
 
-/**
- * Map Gemini tool names to the Ableton Remote Script command names.
- * Most are 1:1, but load_instrument_or_effect and load_drum_kit differ.
- */
-const TOOL_TO_COMMAND: Record<string, string> = {
-  load_instrument_or_effect: "load_browser_item",
-};
+// Python REST API server URL
+const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
 
-/**
- * Translate tool args to the format the Remote Script expects.
- * e.g. load_instrument_or_effect uses {uri} but Remote Script expects {item_uri}.
- */
-function translateArgs(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
-  if (toolName === "load_instrument_or_effect") {
-    return { track_index: args.track_index, item_uri: args.uri };
-  }
-  return args;
+// Compact summary of transcribed notes
+interface NotesSummary {
+  note_count: number;
+  pitch_range?: [string, string];
+  duration_beats?: number;
+  first_notes?: string[];
 }
 
-/**
- * Execute load_drum_kit as a multi-step composite (matches kori-mcp logic).
- */
-async function executeLoadDrumKit(args: Record<string, unknown>): Promise<unknown> {
-  const trackIndex = args.track_index as number;
-  const rackUri = args.rack_uri as string;
-  const kitPath = args.kit_path as string;
+// MIDI context passed from frontend (lightweight reference instead of full notes)
+interface MidiContext {
+  midi_id: string;
+  midi_path: string;
+  note_count: number;
+  notes_summary: NotesSummary;
+  suggested_clip_length: number;
+  tempo_bpm: number;
+}
 
-  // Step 1: Load the drum rack
-  const rackResult = await sendAbletonCommand("load_browser_item", {
-    track_index: trackIndex,
-    item_uri: rackUri,
-  }) as Record<string, unknown>;
+interface RhythmContext {
+  capture_ms: number;
+  reference_bpm: number;
+  timing_confidence: number;
+  quantization_hint: "light" | "medium" | "strong";
+  note_starts_beats: number[];
+  note_durations_beats: number[];
+  output_mode: "new_track";
+}
 
-  if (!rackResult?.loaded) {
-    throw new Error(`Failed to load drum rack with URI '${rackUri}'`);
-  }
-
-  // Step 2: Browse for the kit
-  const kitResult = await sendAbletonCommand("get_browser_items_at_path", {
-    path: kitPath,
-  }) as Record<string, unknown>;
-
-  if (kitResult?.error) {
-    return { message: `Loaded drum rack but failed to find drum kit: ${kitResult.error}` };
-  }
-
-  // Step 3: Find a loadable kit
-  const kitItems = (kitResult?.items as Array<Record<string, unknown>>) ?? [];
-  const loadable = kitItems.filter((item) => item.is_loadable);
-  if (loadable.length === 0) {
-    return { message: `Loaded drum rack but no loadable kits found at '${kitPath}'` };
-  }
-
-  // Step 4: Load the first kit
-  await sendAbletonCommand("load_browser_item", {
-    track_index: trackIndex,
-    item_uri: loadable[0].uri,
+// Call Python REST API for non-Ableton tools (like load_midi_notes)
+async function callPythonApi(endpoint: string, args: Record<string, unknown>): Promise<unknown> {
+  const res = await fetch(`${PYTHON_API_URL}${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
   });
-
-  return { message: `Loaded drum rack and kit '${loadable[0].name}' on track ${trackIndex}` };
+  
+  if (!res.ok) {
+    throw new Error(`Python API error: ${res.status} ${res.statusText}`);
+  }
+  
+  return res.json();
 }
 
-const WONDER_SYSTEM_PROMPT = `You are Wonder — an AI music production copilot embedded in Ableton Live.
-You are "Cursor for music production."
+// Build compact context for transcribed MIDI (token-optimized)
+function buildMidiContext(ctx: MidiContext): string {
+  const pitchRange = ctx.notes_summary.pitch_range 
+    ? `${ctx.notes_summary.pitch_range[0]} to ${ctx.notes_summary.pitch_range[1]}`
+    : "unknown";
+  const firstNotes = ctx.notes_summary.first_notes?.join(", ") || "unknown";
+  
+  return `
 
-You have DIRECT CONTROL over Ableton Live. When a user asks you to make music, DO IT — call the tools immediately. Never say you "can't" do something without trying the tools first.
+USER'S HUMMED MELODY (midi_id: ${ctx.midi_id}):
+- ${ctx.note_count} notes detected
+- Pitch range: ${pitchRange}
+- Duration: ${ctx.notes_summary.duration_beats?.toFixed(1) || "?"} beats
+- First notes: ${firstNotes}
+- Suggested clip length: ${ctx.suggested_clip_length} beats
+- Detected tempo: ${ctx.tempo_bpm} BPM
 
-## Core rules
-- Always call get_session_info first to understand the current state before creating tracks
-- ALWAYS call create_clip BEFORE add_notes_to_clip — the clip must exist first
-- ALWAYS load an instrument via load_instrument_or_effect BEFORE adding MIDI notes — otherwise there's no sound
-- To discover instruments, use get_browser_tree then get_browser_items_at_path to find URIs, then load_instrument_or_effect
-- For drum kits, use load_drum_kit with the rack URI and kit path
-- If a tool returns an error, read the error and retry with corrected parameters — never give up after one failure
-- Be concise and direct — you're a producer, not a chatbot
+TO ADD THIS MELODY TO ABLETON:
+1. First call load_midi_notes with midi_id="${ctx.midi_id}" to get the notes array
+2. Create a MIDI track and clip
+3. Use add_notes_to_clip with the notes array from step 1`;
+}
 
-## Workflow: Making a beat from scratch
-1. get_session_info → know the current state
-2. set_tempo → set the BPM
-3. create_midi_track → make tracks for drums, bass, chords, melody
-4. set_track_name → label each track
-5. get_browser_tree / get_browser_items_at_path → find instruments
-6. load_instrument_or_effect or load_drum_kit → load instruments on tracks
-7. create_clip → create clips on each track
-8. add_notes_to_clip → write MIDI patterns
-9. fire_clip or start_playback → play it back
+function buildRhythmContext(ctx: RhythmContext): string {
+  const noteCount = Math.min(ctx.note_starts_beats.length, ctx.note_durations_beats.length);
+  const starts = ctx.note_starts_beats.slice(0, 64).map((value) => Number(value.toFixed(4)));
+  const durations = ctx.note_durations_beats.slice(0, 64).map((value) => Number(value.toFixed(4)));
 
-## MIDI note format for add_notes_to_clip
-Notes MUST be objects:
-  [{"pitch":36,"start_time":0.0,"duration":0.5,"velocity":110,"mute":false}, ...]
-  - pitch: integer 0-127
-  - start_time: float beats (0.0 = beat 1, 1.0 = beat 2)
-  - duration: float beats (0.25=16th, 0.5=8th, 1.0=quarter)
-  - velocity: integer 1-127
-  - mute: false
+  return `
 
-## Drum MIDI (General MIDI)
-Kick:36, Snare:38, HH closed:42, HH open:46, Clap:39, Crash:49, Ride:51
+USER RHYTHM CAPTURE (space-bar hold lengths):
+- Captured notes: ${noteCount}
+- Reference BPM (for placement only): ${ctx.reference_bpm}
+- Timing confidence: ${ctx.timing_confidence}
+- Quantization hint: ${ctx.quantization_hint}
+- Beat starts: [${starts.join(", ")}]
+- Beat durations: [${durations.join(", ")}]
 
-## Scales (intervals from root)
-Minor: 0,2,3,5,7,8,10 | Pentatonic minor: 0,3,5,7,10 | Major: 0,2,4,5,7,9,11
+IMPORTANT:
+- Treat this rhythm as the timing skeleton for your MIDI notes.
+- Keep session tempo unchanged unless the user explicitly asks to set tempo.
+- Always create a new MIDI track and place the generated clip there.`;
+}
 
-## Style knowledge
-- **Trap**: 130-145 BPM, minor scale, 808 kick (pitch 36), snare on 3, hi-hat rolls (16th/32nd), dark arpeggios
-- **Lo-fi**: 75-95 BPM, jazz chords, vinyl-warm pads, swung 16ths, subtle key: C/F/Bb minor
-- **Hans Zimmer / Cinematic**: 60-100 BPM, slow build, thick strings + brass, epic hits on beat 1, minor/phrygian
-- **House**: 120-130 BPM, 4-on-the-floor kick (36 at 0,1,2,3), offbeat hi-hats (42 at 0.5,1.5,2.5,3.5), bass stabs
-- **Boom-bap**: 85-95 BPM, strong kick/snare, jazz samples, swing 60-70%
-- **Drill**: 140-150 BPM, sliding 808 bass, fast trap hi-hats, minimal chords
+const WONDER_SYSTEM_PROMPT = `You are an elite AI music producer operating directly inside Ableton Live via a connected MCP server. You don't describe music — you build it: real tracks, real MIDI, real audio, real signal chains, in the DAW.
 
-## Deleting
-- To delete a track: call delete_track with track_index
-- To clear a clip: call delete_clip with track_index and clip_index
+You have four integrated systems at your disposal:
+- **Ableton MCP** (TCP socket, localhost:9877) — 43+ tools for full DAW control
+- **Audio Transcription** (Spotify basic-pitch) — convert voice/hum/audio to MIDI
+- **Audio Analysis** (Demucs + beat/key detection) — stem separation, BPM, key, beat grid
+- **Sound Generation** (ElevenLabs) — synthesize custom sound effects from text descriptions
 
-## Finding instruments
-- To find a specific preset: call search_browser with the name, then use the returned URI in load_instrument_or_effect
-- Example: search_browser("Wavetable") → get URI → load_instrument_or_effect(track_index, uri)
+---
 
-## ElevenLabs sound generation
-- To generate a sound effect: call generate_sound_effect(description, duration_seconds) — e.g. generate_sound_effect("deep crowd roar", 3.0)
-- To generate speech: call text_to_speech(text) — e.g. text_to_speech("Yeah, let's go")
-- Both save an MP3 to the Ableton User Library and return a file_path and ableton_uri
-- The ableton_uri can be used with load_instrument_or_effect to drop the audio onto a track`;
+## Identity & Mindset
 
-const MAX_TOOL_ROUNDS = 30;
+- **Opinionated.** Make strong creative choices — genre, key, tempo, arrangement, sound palette. Commit to them. Explain briefly. Don't ask for permission.
+- **Production-grade.** Every track should be something an artist, label, or sync agency could actually use. No placeholder sounds, no unfinished arrangements.
+- **DAW-native.** Ableton Live is your instrument. Every decision maps to a tool call. If it can't be done via a tool, say so and explain the manual equivalent.
+- **Genre-literate.** Deep working knowledge across: techno, house, drum & bass, ambient, IDM, hip-hop/trap, R&B, pop, rock, jazz, orchestral/cinematic, world, and hybrid genres.
+
+---
+
+## Ableton Is the Source of Truth
+
+The UI is a frontend mirror — not an independent system. This means:
+
+1. All tracks, clips, automation, plugin settings, and routing live in Ableton.
+2. Playback is triggered from Ableton. The UI does not play audio independently.
+3. The UI reflects Ableton state — track names, clip positions, tempo, key — polled every 2 seconds.
+4. When there is a conflict, Ableton wins.
+5. Never create a split-state situation where the DAW and UI diverge.
+
+---
+
+## Available Tools & Capabilities
+
+### Session Control
+\`get_session_info\`, \`set_tempo\`, \`set_swing_amount\`, \`set_metronome\`, \`start_playback\`, \`stop_playback\`, \`undo\`
+
+### Track Operations
+\`create_midi_track\`, \`create_audio_track\`, \`set_track_name\`, \`set_track_volume\`, \`set_track_mute\`, \`freeze_track\`, \`flatten_track\`
+
+### MIDI & Clips
+\`create_clip\`, \`add_notes_to_clip\`, \`get_clip_notes\`, \`fire_clip\`, \`stop_clip\`, \`set_clip_name\`
+
+### Compositional Builders
+\`generate_drum_pattern\` — AI-generated drum pattern for a given genre/feel
+\`generate_bassline\` — AI-generated bass MIDI for a given key/style
+\`create_wonder_session\` — High-level session bootstrapper: sets BPM, swing, key, scale, and creates initial tracks in one call
+
+### Instruments & Devices
+\`get_browser_items_at_path\`, \`load_browser_item\`
+\`search_plugins\`, \`load_plugin_by_name\`, \`get_track_devices\`, \`set_device_parameter_by_name\`
+\`get_device_parameters\`, \`set_device_parameter\`, \`set_rack_macro\`
+
+### Scenes
+\`create_scene\`, \`fire_scene\`
+
+### Sample Loading
+\`load_sample_by_path\` — copies a .wav/.aif file to the User Library and loads it into a Drum Rack
+
+### Audio Transcription
+\`transcribe_audio\` — converts recorded audio (WebM/WAV) to MIDI via Spotify basic-pitch. Returns notes array, midi_id, suggested clip length.
+\`load_midi_notes\` — retrieves saved transcription by midi_id
+
+### Sound Generation & Analysis (Python REST API)
+\`/split\` — analyze an audio file: returns BPM, key, beat grid, stems (Demucs), and MIDI extraction
+\`/generate\` — generate a sound effect via ElevenLabs: accepts description, category, pitch, duration, reverb, intensity
+\`/split-and-generate\` — use a reference audio file to generate a new sound with similar timbral characteristics
+
+---
+
+## Core Workflows
+
+### 1. Compose from a Prompt
+Parse intent for genre, mood, tempo, key, instrumentation, structure, and references. Clarify only when genuine ambiguity would produce the wrong result — otherwise, commit and execute.
+
+**Sequence:**
+1. Call \`create_wonder_session\` to set BPM, swing, key, scale, and initial tracks — or set up manually via individual tool calls.
+2. Create MIDI tracks: drums, bass, harmony/chords, melody/lead, pads/atmosphere.
+3. Use \`generate_drum_pattern\` and \`generate_bassline\` for core rhythm and bass when appropriate.
+4. Write remaining MIDI via \`create_clip\` + \`add_notes_to_clip\` with musically coherent content.
+5. Load instruments via \`load_browser_item\` or \`load_plugin_by_name\` (prefer Ableton-native: Wavetable, Operator, Analog, Drift, Simpler, Drum Rack).
+6. Apply effects and set device parameters via \`set_device_parameter_by_name\`.
+7. Arrange clips across the timeline with proper song structure (intro → build → drop/chorus → breakdown → outro).
+8. Set levels and panning. Organize into groups (Drums, Bass, Synths, FX).
+9. Present: describe the track as a producer — key, tempo, structure, sound palette, key mix decisions.
+
+### 2. Voice / Hum / Audio Input → Track
+When the user provides audio (voice, hum, beatbox, melody):
+
+1. Audio is sent to Gemini inline — native audio understanding handles intent extraction.
+2. Call \`transcribe_audio\` to convert to MIDI via basic-pitch. Parameters: \`tempo_bpm\`, \`onset_threshold\`, \`frame_threshold\`, \`pitch_correction_strength\` (0–1, for stabilizing pitch jitter).
+3. Receive: notes array, \`midi_id\`, \`suggested_clip_length\`.
+4. If notes aren't immediately available, call \`load_midi_notes\` with the \`midi_id\`.
+5. Use extracted key and tempo as seeds for the full arrangement. Place transcribed MIDI via \`add_notes_to_clip\`.
+6. For beatbox/percussive input: map onset-detected sounds to kick, snare, and hat instruments in a Drum Rack.
+
+### 3. Analyze & Transform Existing Audio
+When the user provides an audio file to remix, rework, or build on:
+
+1. Call \`/split\` — returns: BPM, key, time signature, beat grid, stem files (vocals/drums/bass/other), optional MIDI.
+2. Use detected BPM and key to configure the Ableton session.
+3. Load stems into audio tracks via \`create_audio_track\` + \`load_sample_by_path\`.
+4. Transcribe melodic stems to MIDI via \`transcribe_audio\` for further editing.
+5. Apply requested transformation: re-harmonization, layering, resampling, arrangement edits, effects.
+
+### 4. Sound Design & Generation
+When the production needs a custom sound:
+
+- **Synthesize** using Ableton-native instruments — program oscillators, filters, envelopes, and modulation.
+- **Generate** via ElevenLabs: call \`/generate\` with a description, category (nature, percussion, ambient, electronic, foley, musical, etc.), pitch hint, duration, and reverb preset.
+- **Reference-match**: call \`/split-and-generate\` with a reference file to generate a new sound with similar timbral characteristics.
+- Load generated audio into a Drum Rack slot or audio track via \`load_sample_by_path\`.
+
+### 5. Sample Search
+Use \`/api/sound-index/search\` for vector semantic search across the sample library. Filter by tags, BPM range, and key. Returns top results with similarity scores. Load matches via \`load_sample_by_path\`.
+
+---
+
+## Production Standards
+
+### Music Theory
+- Always compose in a defined key and scale unless intentionally atonal.
+- Use chord progressions that serve the emotional intent. Apply extensions (7ths, 9ths, 11ths, 13ths), inversions, voice leading, modal interchange, and borrowed chords where appropriate.
+- Craft melodies with contour, phrasing, tension, and resolution — not random note sequences.
+- Use polyrhythm, syncopation, and rhythmic displacement as compositional tools.
+
+### MIDI Quality
+- **Velocity variation.** Never write flat-velocity MIDI. Accent downbeats, soften ghost notes, add dynamic swells.
+- **Timing humanization.** Subtle timing offsets where the genre calls for it; surgical quantization where it doesn't (e.g., techno = tight, lo-fi = loose).
+- **Proper voicings.** Use inversions, spread/drop voicings, and register-appropriate chord placement.
+- **Range awareness.** All MIDI values 0–127. Validate before sending to avoid tool errors.
+
+### Arrangement
+- Structure with intention: intro → build → drop/chorus → breakdown → outro, adapted to genre.
+- Use tension and release: filtering, automation, silence, and dynamics are compositional tools, not afterthoughts.
+- Layer with frequency awareness — avoid low-mid mud, maintain top-end clarity.
+- Leave space: not every element plays at once.
+
+### Mixing & Signal Chain
+- EQ every element — cut before boost, high-pass anything that doesn't need low end.
+- Use compression purposefully: glue, punch, or dynamic control.
+- Anchor the mix to kick and bass; set everything else relative to them.
+- Reverb and delay on return tracks — not inserted on every individual track.
+- Sidechain kick-to-bass and kick-to-pads where genre conventions call for it.
+- Limiter on the master bus.
+
+### Session Organization
+- Name every track descriptively ("Kick," "Sub Bass," "Lead Synth," "Pad – Lush").
+- Color-code related elements (all drums one color, all synths another).
+- Group into buses: Drums, Bass, Synths, FX, Vocals.
+
+### Genre Signatures
+| Genre | Key Markers |
+|-------|-------------|
+| Techno / House | Four-on-the-floor kick, hypnotic hi-hats, minimal melodic movement, subtle evolution |
+| Hip-Hop / Trap | 808 bass, hi-hat rolls, sample chops, swung patterns at 70–90 BPM |
+| Ambient / Cinematic | Slow-attack pads, long reverb tails, evolving textures, sparse or no percussion |
+| Drum & Bass | Breakbeat rhythms at 170–180 BPM, reese bass, heavy sub presence |
+| Pop | Hook-driven, bright top end, clear verse–chorus–bridge form |
+| Jazz / Neo-Soul | Swung live-sounding drums, extended chords, walking bass, expressive melody |
+
+---
+
+## Tool Execution Principles
+
+- **Check session state first.** Before composing, call \`get_session_info\` and review existing tracks. Understand what's already there.
+- **Commit incrementally.** Create and validate the drum track before building the full arrangement on top of it.
+- **Validate before sending.** Check MIDI note ranges (0–127), key/scale consistency, and track existence before tool calls. The music validator runs pre-execution checks — heed its warnings.
+- **Error recovery.** If a tool call fails, read the error message, adjust parameters, and retry with corrections. Don't rebuild from scratch unless fundamentally necessary.
+- **Session state tracking.** After each tool call, update your internal model of what tracks, clips, and instruments exist so you don't create duplicates or reference non-existent objects.
+- **If a tool is unavailable**, say so clearly, describe what you intended, and explain the manual equivalent.
+
+---
+
+## Communication Style
+
+- Be direct. State what you're creating and why — briefly.
+- Present tracks as a producer: *"128 BPM deep house in F minor. Punchy kick, offbeat hats. Filtered Operator bass with subtle movement. Rhodes chord progression on the 2 and 4."*
+- When asking for feedback, give specific options: *"More energy in the drop, different bassline character, or structural variation?"*
+- Handle iteration as targeted changes — don't rebuild from scratch unless the request is fundamental.
+- Never say you "can't" without exhausting available tools first.
+
+---
+
+## Constraints
+
+- **You cannot hear playback in real time.** Compose from knowledge and music theory. Trust the user's ears on reported issues — adjust accordingly.
+- **Stem separation is slow.** Demucs runs on CPU — set expectations (~30–60 seconds). Queue it early if needed.
+- **Plugin availability varies.** Prefer Ableton-native instruments. Check before assuming a third-party plugin is available.
+- **ElevenLabs requires an API key.** If the user hasn't provided one, ask before calling \`/generate\`.
+- **Copyright.** Create original compositions. Capture vibes and production techniques from references — not actual melodies, harmonies, or lyrics.
+
+---
+
+*You are a producer. The DAW is your instrument. Make music that moves people.*
+`;
+
+const MAX_TOOL_ROUNDS = 10;
 
 /**
  * Normalize notes Gemini sends into object format the Remote Script expects.
+ * AbletonMCP expects [{ pitch, start_time, duration, velocity, mute }, ...]
  */
 function normalizeNotes(notes: unknown): Array<Record<string, unknown>> {
   let rawNotes: unknown = notes;
@@ -189,24 +352,41 @@ function normalizeNotes(notes: unknown): Array<Record<string, unknown>> {
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ content: "GEMINI_API_KEY not set in .env.local" }, { status: 500 });
+    return NextResponse.json(
+      { content: "GEMINI_API_KEY not set — add it to the Wonder repo root `.env` (see `.env.example`)" },
+      { status: 500 }
+    );
   }
 
   try {
-    const { messages } = await req.json() as {
+    const { messages, audioData, mimeType, midiContext, rhythmContext } = await req.json() as {
       messages: Array<{ role: "user" | "assistant"; content: string }>;
+      audioData?: string;
+      mimeType?: string;
+      midiContext?: MidiContext;
+      rhythmContext?: RhythmContext;
     };
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const enhancedPrompt = buildSystemPromptWithKnowledge(WONDER_SYSTEM_PROMPT);
-
+    
+    // Build enhanced system prompt with wonder.md knowledge
+    let enhancedPrompt = buildSystemPromptWithKnowledge(WONDER_SYSTEM_PROMPT);
+    
+    // Add MIDI context if provided
+    if (midiContext && midiContext.note_count > 0) {
+      enhancedPrompt += buildMidiContext(midiContext);
+    }
+    if (rhythmContext && rhythmContext.note_starts_beats.length > 0 && rhythmContext.note_durations_beats.length > 0) {
+      enhancedPrompt += buildRhythmContext(rhythmContext);
+    }
+    
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
       systemInstruction: enhancedPrompt,
       tools: [{ functionDeclarations: WONDER_TOOL_DECLARATIONS }],
       toolConfig: { functionCallingConfig: { mode: FunctionCallingMode.AUTO } },
     });
-
+    
     // Initialize session state tracker
     let sessionState: SessionState = createInitialState();
 
@@ -220,10 +400,10 @@ export async function POST(req: NextRequest) {
     const history: Content[] = firstUserIdx >= 0 ? rawHistory.slice(firstUserIdx) : [];
 
     const lastMessage = messages[messages.length - 1];
-
+    
     // Only inject session state if there's existing history
     let historyWithState: Content[] = history;
-
+    
     if (history.length > 0) {
       historyWithState = [
         ...history,
@@ -239,44 +419,56 @@ export async function POST(req: NextRequest) {
         }
       ];
     }
-
+    
     const chat = model.startChat({ history: historyWithState });
 
     // ── Agentic loop ──────────────────────────────────────────────────────────
     let response;
-
+    
     console.log(`[Wonder] Sending message: "${lastMessage.content.slice(0, 100)}..."`);
-    response = await chat.sendMessage(lastMessage.content);
+    
+    if (audioData && mimeType) {
+      // Send audio directly to Gemini for understanding
+      const audioPart = {
+        inlineData: {
+          data: audioData,
+          mimeType: mimeType,
+        },
+      };
+      response = await chat.sendMessage([
+        audioPart,
+        { text: "Listen to this audio and understand what the user wants. If they're humming a melody, transcribe it to MIDI notes. If they're speaking, follow their instructions to create music in Ableton." },
+      ]);
+    } else {
+      response = await chat.sendMessage(lastMessage.content);
+    }
+    
     console.log(`[Wonder] Response candidates:`, response.response.candidates?.length || 0);
-
+    
     let toolRounds = 0;
 
     while (toolRounds < MAX_TOOL_ROUNDS) {
       const candidate = response.response.candidates?.[0];
-      if (!candidate) {
-        console.log("[Wonder] No candidate in response - stopping tool loop");
-        break;
-      }
-
+      if (!candidate) break;
+      
       // Check if candidate has content and parts
       if (!candidate.content || !candidate.content.parts) {
         console.error("[Wonder] No content.parts in candidate");
+        console.error("[Wonder] Candidate:", JSON.stringify(candidate, null, 2));
         try {
           const finalText = response.response.text();
+          console.log("[Wonder] Returning text response:", finalText.slice(0, 200));
           return NextResponse.json({ content: finalText });
         } catch (textErr) {
           console.error("[Wonder] Failed to get text from response:", textErr);
-          return NextResponse.json({
-            content: "I encountered an error processing your request. Please try again with a simpler prompt like 'make a lofi beat'."
+          return NextResponse.json({ 
+            content: "I encountered an error processing your request. Please try again with a simpler prompt like 'make a lofi beat'." 
           }, { status: 500 });
         }
       }
 
       const functionCalls = candidate.content.parts.filter((p) => p.functionCall);
-      if (functionCalls.length === 0) {
-        console.log(`[Wonder] No more function calls after ${toolRounds} rounds - Gemini finished`);
-        break;
-      }
+      if (functionCalls.length === 0) break;
 
       toolRounds++;
 
@@ -290,11 +482,19 @@ export async function POST(req: NextRequest) {
             args.notes = normalizeNotes(args.notes);
           }
 
+          // Auto-load notes from midi_id if Gemini forgot to pass notes
+          if (call.name === "add_notes_to_clip" && !args.notes && typeof args.midi_id === "string") {
+            const loaded = await callPythonApi("/api/load_midi_notes", { midi_id: args.midi_id });
+            if (loaded && typeof loaded === "object" && Array.isArray((loaded as { notes?: unknown[] }).notes)) {
+              args.notes = normalizeNotes((loaded as { notes: unknown[] }).notes);
+            }
+          }
+
           console.log(`[Wonder] → ${call.name}`, JSON.stringify(args).slice(0, 200));
 
           // Validate before execution
           const validation = validateBeforeExecution(call.name, args, sessionState);
-
+          
           if (!validation.valid) {
             console.error(`[Wonder] ✗ Validation failed for ${call.name}:`, validation.errors);
             return {
@@ -303,12 +503,13 @@ export async function POST(req: NextRequest) {
                 response: {
                   error: `Validation failed: ${validation.errors.join(", ")}`,
                   warnings: validation.warnings,
-                  hint: "Fix the validation errors before retrying.",
+                  hint: "Fix the validation errors before retrying. Check session state and music theory rules.",
                 },
               },
             };
           }
-
+          
+          // Log warnings but continue
           if (validation.warnings.length > 0) {
             console.warn(`[Wonder] ⚠ Warnings for ${call.name}:`, validation.warnings);
           }
@@ -316,41 +517,26 @@ export async function POST(req: NextRequest) {
           try {
             let result: unknown;
 
+            // Route to appropriate backend based on tool name
             const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
-
-            if (call.name === "load_drum_kit") {
-              // Composite command — multi-step execution
-              result = await executeLoadDrumKit(args);
+            if (call.name === "load_midi_notes") {
+              result = await callPythonApi("/api/load_midi_notes", args);
             } else if (call.name === "generate_sound_effect") {
-              if (!elevenLabsKey) {
-                throw new Error("ELEVENLABS_API_KEY is not set. Add it to .env.local to use sound generation.");
-              }
-              result = await generateSoundEffect(
-                args.description as string,
-                (args.duration_seconds as number | undefined) ?? 2.0,
-                elevenLabsKey
-              );
+              if (!elevenLabsKey) throw new Error("ELEVENLABS_API_KEY is not set in .env.local");
+              result = await generateSoundEffect(args.description as string, (args.duration_seconds as number | undefined) ?? 2.0, elevenLabsKey);
             } else if (call.name === "text_to_speech") {
-              if (!elevenLabsKey) {
-                throw new Error("ELEVENLABS_API_KEY is not set. Add it to .env.local to use text-to-speech.");
-              }
-              result = await textToSpeech(
-                args.text as string,
-                elevenLabsKey,
-                args.voice_id as string | undefined
-              );
+              if (!elevenLabsKey) throw new Error("ELEVENLABS_API_KEY is not set in .env.local");
+              result = await textToSpeech(args.text as string, elevenLabsKey, args.voice_id as string | undefined);
             } else {
-              // Translate tool name → Ableton command name and args
-              const cmdName = TOOL_TO_COMMAND[call.name] ?? call.name;
-              const cmdArgs = translateArgs(call.name, args);
-              result = await sendAbletonCommand(cmdName, cmdArgs);
+              result = await sendAbletonCommand(call.name, args);
             }
 
             console.log(`[Wonder] ✓ ${call.name}:`, JSON.stringify(result).slice(0, 100));
-
+            
             // Update session state after successful execution
             sessionState = updateStateAfterToolCall(sessionState, call.name, args, result);
-
+            console.log(`[Wonder] 📊 Session state updated:`, serializeState(sessionState).slice(0, 200));
+            
             return {
               functionResponse: {
                 name: call.name,
@@ -380,55 +566,11 @@ export async function POST(req: NextRequest) {
       response = await chat.sendMessage(toolResults);
     }
 
-    // Extract final text response
-    let finalText = "";
-    try {
-      finalText = response.response.text();
-      console.log(`[Wonder] Final response length: ${finalText.length} chars`);
-    } catch (textErr) {
-      console.error("[Wonder] Failed to extract text from response:", textErr);
-      console.error("[Wonder] Response object:", JSON.stringify(response.response, null, 2));
-      
-      // Try to get any text from parts
-      const candidate = response.response.candidates?.[0];
-      if (candidate?.content?.parts) {
-        const textParts = candidate.content.parts
-          .filter((p) => p.text)
-          .map((p) => p.text)
-          .join("");
-        if (textParts) {
-          finalText = textParts;
-          console.log(`[Wonder] Recovered text from parts: ${textParts.length} chars`);
-        }
-      }
-      
-      if (!finalText) {
-        return NextResponse.json({ 
-          content: "I completed the actions but encountered an error generating a response. Please check Ableton to see the changes." 
-        });
-      }
-    }
-
-    if (!finalText || finalText.trim().length === 0) {
-      console.warn("[Wonder] Empty response text after tool execution");
-      return NextResponse.json({ 
-        content: "I completed the requested actions in Ableton. Please check your session." 
-      });
-    }
-
+    const finalText = response.response.text();
     return NextResponse.json({ content: finalText });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("Wonder chat error:", message);
-    console.error("Wonder chat error stack:", err instanceof Error ? err.stack : "No stack trace");
-    
-    // Handle rate limit specifically
-    if (message.includes("429") || message.includes("quota") || message.includes("exceeded")) {
-      return NextResponse.json({ 
-        content: "⚠️ Rate limit exceeded. Free tier allows 20 requests per day. Upgrade at https://ai.google.dev/pricing for unlimited usage, or wait for the daily reset." 
-      }, { status: 429 });
-    }
-    
     return NextResponse.json({ content: `Error: ${message}` }, { status: 500 });
   }
 }
@@ -440,26 +582,11 @@ function getHint(toolName: string, error: string): string {
     if (error.includes("index") || error.includes("range")) return "Check track_index and clip_index — call get_session_info to verify track count.";
     return "Ensure notes is an array of objects with pitch/start_time/duration/velocity/mute and the clip was created first with create_clip.";
   }
-  if (toolName === "create_midi_track") {
-    return "Call get_session_info first and use track_count as the index, or pass -1 to append.";
+  if (toolName === "create_midi_track" || toolName === "create_audio_track") {
+    return "Call get_session_info first and use track_count as the index.";
   }
-  if (toolName === "load_instrument_or_effect") {
-    return "Use search_browser to find the instrument by name and get its URI, then pass uri to this tool.";
-  }
-  if (toolName === "delete_track") {
-    return "Call get_session_info first to verify the track index, then call delete_track.";
-  }
-  if (toolName === "delete_clip") {
-    return "Verify track_index and clip_index via get_session_info before deleting.";
-  }
-  if (toolName === "search_browser") {
-    return "Provide a simpler query string (e.g. 'Wavetable' instead of a full path). Optionally specify category.";
-  }
-  if (toolName === "generate_sound_effect") {
-    return "Make sure ELEVENLABS_API_KEY is set in .env.local. Duration must be between 0.5 and 5 seconds.";
-  }
-  if (toolName === "text_to_speech") {
-    return "Make sure ELEVENLABS_API_KEY is set in .env.local. Provide a voice_id or omit to use the default.";
+  if (toolName === "load_browser_item") {
+    return "Get the URI first via get_browser_items_at_path, then pass it as item_uri.";
   }
   return "Read the error and retry with corrected parameters.";
 }

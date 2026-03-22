@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ._handlers import OUTPUT_ROOT, handle_generate, handle_split, handle_split_and_generate
+from .utils.audio_to_midi import get_midi_file_path, transcribe_audio_base64
 
 app = FastAPI(
     title="Wonder Server",
@@ -158,6 +159,75 @@ async def split_and_generate(
         tmp_path.unlink(missing_ok=True)
 
     return _absolutize_to_urls(result)
+
+
+# ---------------------------------------------------------------------------
+# /transcribe — audio-to-MIDI via Spotify basic-pitch
+# ---------------------------------------------------------------------------
+
+class TranscribeRequest(BaseModel):
+    audio_data: str
+    input_format: str = "webm"
+    tempo_bpm: float = 120.0
+    onset_threshold: float = 0.5
+    frame_threshold: float = 0.3
+    pitch_correction_strength: float = 0.7
+
+
+@app.post("/transcribe")
+async def transcribe_audio(body: TranscribeRequest) -> dict[str, Any]:
+    """
+    Transcribe base64-encoded audio (WebM or WAV) to MIDI notes using
+    Spotify's basic-pitch. Returns notes and a saved midi_id for later retrieval.
+    """
+    return transcribe_audio_base64(
+        body.audio_data,
+        body.input_format,
+        body.tempo_bpm,
+        body.onset_threshold,
+        body.frame_threshold,
+        body.pitch_correction_strength,
+    )
+
+
+@app.get("/midi/{midi_id}")
+async def get_midi_notes(midi_id: str) -> dict[str, Any]:
+    """
+    Retrieve notes for a previously transcribed MIDI file by its ID.
+    Returns notes in the same format as POST /transcribe.
+    """
+    import pretty_midi
+
+    midi_path = get_midi_file_path(midi_id)
+    if not midi_path:
+        raise HTTPException(status_code=404, detail=f"MIDI not found: {midi_id}")
+
+    try:
+        pm = pretty_midi.PrettyMIDI(midi_path)
+        _, tempos = pm.get_tempo_change_times()
+        tempo_bpm = float(tempos[0]) if len(tempos) > 0 else 120.0
+        beats_per_second = tempo_bpm / 60.0
+
+        notes = []
+        for instrument in pm.instruments:
+            for note in instrument.notes:
+                notes.append({
+                    "pitch": note.pitch,
+                    "start_time": round(note.start * beats_per_second, 4),
+                    "duration": round((note.end - note.start) * beats_per_second, 4),
+                    "velocity": note.velocity,
+                    "mute": False,
+                })
+
+        return {
+            "success": True,
+            "midi_id": midi_id,
+            "notes": notes,
+            "note_count": len(notes),
+            "tempo_bpm": tempo_bpm,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

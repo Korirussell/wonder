@@ -2,31 +2,37 @@
 
 import { Track } from "@/types";
 import DevicePill from "./DevicePill";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 interface TrackColumnProps {
   track: Track;
   index: number;
   onUpdate: (id: number, patch: Partial<Track>) => void;
-  onAbletonCommand?: (cmd: string, params: Record<string, unknown>) => void;
 }
 
-export default function TrackColumn({ track, index, onUpdate, onAbletonCommand }: TrackColumnProps) {
+export default function TrackColumn({ track, index, onUpdate }: TrackColumnProps) {
   const faderTop = `${Math.round((1 - track.volume) * 70)}%`;
 
-  const handleMute = () => {
-    const next = !track.mute;
-    onUpdate(track.id, { mute: next });
-    onAbletonCommand?.("set_track_mute", { track_index: index, mute: next });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: track.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
   };
 
-  // Solo/Arm: optimistic-only (not confirmed in ableton-mcp allowlist yet)
-  const handleSolo = () => onUpdate(track.id, { solo: !track.solo });
-  const handleArm = () => onUpdate(track.id, { armed: !track.armed });
-
   return (
-    <article className="w-52 flex-shrink-0 bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="p-4 border-b-2 border-[#2D2D2D] bg-stone-50 flex justify-between items-center">
+    <article
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      className="flex-1 min-w-[200px] self-stretch bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow flex flex-col overflow-hidden"
+    >
+      {/* Header — drag handle */}
+      <div
+        {...listeners}
+        className="p-4 border-b-2 border-[#2D2D2D] bg-stone-50 flex justify-between items-center cursor-grab active:cursor-grabbing"
+      >
         <div>
           <span className="font-mono text-[10px] font-bold text-stone-400 block">
             {String(index + 1).padStart(2, "0")}
@@ -51,7 +57,7 @@ export default function TrackColumn({ track, index, onUpdate, onAbletonCommand }
         {/* M S A buttons */}
         <div className="flex gap-2">
           <button
-            onClick={handleMute}
+            onClick={() => onUpdate(track.id, { mute: !track.mute })}
             className={`w-9 h-9 border-2 border-[#2D2D2D] rounded-lg flex items-center justify-center font-mono text-xs font-bold interactive-push ${
               track.mute ? "bg-[#FEF08A]" : "bg-white"
             }`}
@@ -59,7 +65,7 @@ export default function TrackColumn({ track, index, onUpdate, onAbletonCommand }
             M
           </button>
           <button
-            onClick={handleSolo}
+            onClick={() => onUpdate(track.id, { solo: !track.solo })}
             className={`w-9 h-9 border-2 border-[#2D2D2D] rounded-lg flex items-center justify-center font-mono text-xs font-bold interactive-push ${
               track.solo ? "bg-[#C1E1C1] hard-shadow-sm" : "bg-white"
             }`}
@@ -67,7 +73,7 @@ export default function TrackColumn({ track, index, onUpdate, onAbletonCommand }
             S
           </button>
           <button
-            onClick={handleArm}
+            onClick={() => onUpdate(track.id, { armed: !track.armed })}
             className={`w-9 h-9 border-2 rounded-lg flex items-center justify-center font-mono text-xs font-bold interactive-push ${
               track.armed
                 ? "bg-[#fa7150]/20 border-[#fa7150] border-dashed text-[#aa371c]"
