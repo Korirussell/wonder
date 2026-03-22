@@ -44,6 +44,13 @@ lo-fi: kick 1+7, snare 5+13, hi-hats every other step
 - applyVibeFX vibes: "lo-fi" | "dreamy" | "dark" | "bright" | "warm" | "gritty" | "808" | "clean" | "bedroom-pop" | "drill" | "jazz"
 - setTrackFX lets you target one track with exact reverb/distortion/EQ values.
 
+## CRITICAL: Editing Existing Tracks
+- Every user message contains a [Current session tracks: ...] block listing track names and IDs.
+- When the user says "increase reverb on X", "make the Y more distorted", "add more bass to Z", "turn up the reverb", etc. — look up the track by name in [Current session tracks:] and call setTrackFX with that trackId. NEVER generate new audio for these requests.
+- "increase" reverb → set reverb to ~0.5-0.7. "add a little" → ~0.2-0.3. "max out" → 0.9.
+- "add distortion/drive" → set drive 0.3-0.6 + cabEnabled true. "heavy" → 0.7-0.9.
+- If no tracks exist yet, then generate audio as normal.
+
 ## FX Preset Reference
 lo-fi: reverb 0.25, drive 0.15, low +3, mid -2, high -4
 dreamy: reverb 0.65, drive 0, low 0, mid -1, high +2

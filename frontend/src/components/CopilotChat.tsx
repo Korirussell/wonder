@@ -589,6 +589,8 @@ export default function CopilotChat() {
   const AUDIO_INTENT_RE = /\b(generate|sound|beat|loop|create|make|sample|drum|bass|pad|melody|chord|music)\b/i;
   const AGENTIC_MIX_RE = /\b(mix the tracks|auto-level|balance)\b/i;
   const FULL_SONG_RE = /\b(full song|generate a song|arrange a track)\b/i;
+  // Editing existing tracks — should go to AI (setTrackFX/applyVibeFX), NOT audio bypass
+  const FX_EDIT_RE = /\b(reverb|distortion|drive|eq|bass|treble|high|low|mid|bright|dark|warm|gritty|lo-fi|dreamy|wet|dry|fx|effect|filter|increase|decrease|add more|less|turn (up|down)|boost|cut|muffled|crisp|saturate|compress|delay|echo|chorus|flanger|vibe|feel|sound like|make it)\b/i;
 
   const sendMessage = async (overrideText?: string, options?: SendMessageOptions) => {
     const text = overrideText ?? input.trim();
@@ -1080,10 +1082,18 @@ export default function CopilotChat() {
     }
     // ── END DEMO MAGIC ───────────────────────────────────────────────────────
 
-    const fullText = spotifyPrefix + text + rhythmSuffix;
+    // Build current session track context so AI knows IDs for FX targeting
+    const currentTracks = dawStateRef.current.tracks;
+    const trackContext = currentTracks.length > 0
+      ? `\n\n[Current session tracks: ${currentTracks.map(t => `"${t.name}" (id: ${t.id})`).join(", ")}]`
+      : "";
+
+    const fullText = spotifyPrefix + text + rhythmSuffix + trackContext;
 
     // ── Audio bypass: skip AI streaming, fetch directly ────────────────────
-    if (AUDIO_INTENT_RE.test(text)) {
+    // Skip bypass if this looks like an FX edit request targeting existing tracks
+    const isFxEdit = FX_EDIT_RE.test(text) && currentTracks.length > 0;
+    if (!isFxEdit && AUDIO_INTENT_RE.test(text)) {
       // 1. Show user message immediately — no empty bubble
       const userMsgId = crypto.randomUUID();
       setMessages(prev => [...prev, {
