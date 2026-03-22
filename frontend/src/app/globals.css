@@ -1,10 +1,9 @@
 @import "tailwindcss";
 
-/* Graph-paper dot grid background */
 body {
-  background-color: #fdfdfb;
-  background-image: radial-gradient(#2d2d2d 0.5px, transparent 0.5px);
-  background-size: 24px 24px;
+  background-color: #f5f5f2;
+  background-image: radial-gradient(rgba(45, 45, 45, 0.18) 0.5px, transparent 0.5px);
+  background-size: 20px 20px;
   font-family: "Be Vietnam Pro", sans-serif;
   color: #2d2d2d;
   overflow: hidden;

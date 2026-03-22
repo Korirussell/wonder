@@ -2,24 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 
-// Utility function to convert Tailwind color classes to hex colors
-const getColorFromClass = (colorClass: string): string => {
-  const colorMap: { [key: string]: string } = {
-    'bg-blue-500': '#3b82f6',
-    'bg-cyan-500': '#06b6d4',
-    'bg-green-500': '#10b981',
-    'bg-purple-500': '#8b5cf6',
-    'bg-orange-500': '#f97316',
-    'bg-pink-500': '#ec4899',
-    'bg-yellow-500': '#eab308',
-    'bg-red-500': '#ef4444',
-    'bg-gray-500': '#6b7280',
-    'bg-indigo-500': '#6366f1',
-  };
-
-  return colorMap[colorClass] || '#3b82f6'; // Default to blue if not found
-};
-
 interface WaveformProps {
   audioFile?: File;
   audioBlob?: Blob;
@@ -37,8 +19,7 @@ export function Waveform({
   color = "#3b82f6",
   className = "",
 }: WaveformProps) {
-  // Convert Tailwind class to hex color if needed
-  const actualColor = color.startsWith('bg-') ? getColorFromClass(color) : color;
+  const actualColor = color;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [waveformData, setWaveformData] = useState<number[]>([]);
   const [isLoading, setIsLoading] = useState(false);
