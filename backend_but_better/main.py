@@ -1,8 +1,11 @@
 from fastapi import FastAPI
 import uvicorn
 
+from api.samples import router as samples_router
+
 
 app = FastAPI(title="backend_but_better")
+app.include_router(samples_router)
 
 
 @app.get("/")
