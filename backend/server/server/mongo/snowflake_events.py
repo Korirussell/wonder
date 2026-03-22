@@ -68,3 +68,69 @@ def session_document_to_analytics_events(session: dict[str, Any]) -> list[dict[s
             )
 
     return events
+
+
+def message_feedback_to_event(
+    user_id: str,
+    session_id: str,
+    message_id: str,
+    turn_index: int,
+    feedback: str,
+    ts: Any = None,
+) -> dict[str, Any]:
+    """Build a ``message_feedback`` analytics row."""
+    from datetime import datetime, timezone
+
+    return {
+        "event_type": "message_feedback",
+        "user_id": user_id,
+        "session_id": session_id,
+        "message_id": message_id,
+        "turn_index": turn_index,
+        "feedback": feedback,
+        "ts": _iso(ts or datetime.now(timezone.utc)),
+    }
+
+
+def sound_saved_to_event(
+    user_id: str,
+    session_id: str,
+    turn_index: int,
+    description: str,
+    ableton_uri: str | None,
+    success: bool,
+    ts: Any = None,
+) -> dict[str, Any]:
+    """Build a ``sound_saved`` analytics row."""
+    from datetime import datetime, timezone
+
+    return {
+        "event_type": "sound_saved",
+        "user_id": user_id,
+        "session_id": session_id,
+        "turn_index": turn_index,
+        "query_text": description[:4000],
+        "detail": (ableton_uri or "")[:2000],
+        "success": success,
+        "ts": _iso(ts or datetime.now(timezone.utc)),
+    }
+
+
+def user_report_to_event(
+    user_id: str,
+    report_id: str,
+    report_type: str,
+    subject: str,
+    ts: Any = None,
+) -> dict[str, Any]:
+    """Build a ``user_report`` analytics row."""
+    from datetime import datetime, timezone
+
+    return {
+        "event_type": "user_report",
+        "user_id": user_id,
+        "message_id": report_id,
+        "report_type": report_type,
+        "subject": subject[:512],
+        "ts": _iso(ts or datetime.now(timezone.utc)),
+    }

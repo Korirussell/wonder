@@ -11,7 +11,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { Chat, ChatMessage } from "@/types";
+import type { Chat, ChatMessage, MessageFeedback } from "@/types";
 import { useAuth } from "@/lib/AuthContext";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? process.env.BACKEND_URL ?? "http://localhost:8001";
@@ -43,6 +43,7 @@ interface ChatContextValue {
   getMessages: (chatId: string) => ChatMessage[];
   setLoading: (chatId: string, loading: boolean) => void;
   updateChatPreview: (chatId: string, text: string) => void;
+  setMessageFeedback: (chatId: string, messageId: string, feedback: MessageFeedback) => void;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -213,6 +214,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return messagesRef.current[chatId] ?? [];
   }, []);
 
+  const setMessageFeedback = useCallback((chatId: string, messageId: string, feedback: MessageFeedback) => {
+    setMessages((prev) => ({
+      ...prev,
+      [chatId]: (prev[chatId] ?? []).map((msg) =>
+        msg.id === messageId ? { ...msg, feedback } : msg
+      ),
+    }));
+  }, []);
+
   const createChat = useCallback(async () => {
     if (isAnonymous && chats.length > 0) {
       setActiveChatId(chats[0].id);
@@ -303,6 +313,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     getMessages,
     setLoading,
     updateChatPreview,
+    setMessageFeedback,
   }), [
     activeChatId,
     activeMessages,
@@ -313,6 +324,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     loadingChatIds,
     replaceMessages,
     setLoading,
+    setMessageFeedback,
     switchChat,
     updateChatPreview,
   ]);

@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { AlertCircle, Paperclip, Mic, Send, StopCircle, Music2, X } from "lucide-react";
-import type { ChatApiError, ChatApiResponse, ChatMessage } from "@/types";
+import { AlertCircle, Paperclip, Mic, Send, StopCircle, Music2, X, ThumbsUp, ThumbsDown } from "lucide-react";
+import type { ChatApiError, ChatApiResponse, ChatMessage, MessageFeedback } from "@/types";
 import { DEFAULT_CHAT_GREETING, useChat } from "@/lib/ChatContext";
 import { useAuth } from "@/lib/AuthContext";
 
@@ -109,6 +109,7 @@ export default function CopilotChat() {
     getMessages,
     setLoading,
     updateChatPreview,
+    setMessageFeedback,
   } = useChat();
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -435,6 +436,22 @@ export default function CopilotChat() {
     }
   };
 
+  const handleFeedback = (msg: ChatMessage, vote: MessageFeedback) => {
+    if (!activeChatId) return;
+    setMessageFeedback(activeChatId, msg.id, vote);
+    fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: user?.id,
+        session_id: activeChatId,
+        message_id: msg.id,
+        turn_index: msg.turnIndex ?? -1,
+        feedback: vote,
+      }),
+    }).catch(() => {});
+  };
+
   return (
     <section className="relative w-[40%] flex flex-col border-r-2 border-[#2D2D2D] bg-white/70 backdrop-blur-sm">
       {toastError ? (
@@ -479,6 +496,34 @@ export default function CopilotChat() {
             >
               {msg.content}
             </div>
+
+            {/* Thumbs feedback — assistant messages only, not the greeting */}
+            {msg.role === "assistant" && !msg.isGreeting && (
+              <div className="flex items-center gap-1.5 px-1">
+                <button
+                  onClick={() => handleFeedback(msg, "thumbs_up")}
+                  title="Helpful"
+                  className={`flex items-center rounded-lg border-2 border-[#2D2D2D] px-2 py-1 transition-colors hard-shadow-sm ${
+                    msg.feedback === "thumbs_up"
+                      ? "bg-[#C1E1C1]"
+                      : "bg-white/60 hover:bg-[#C1E1C1]/50"
+                  }`}
+                >
+                  <ThumbsUp size={11} strokeWidth={2.5} />
+                </button>
+                <button
+                  onClick={() => handleFeedback(msg, "thumbs_down")}
+                  title="Not helpful"
+                  className={`flex items-center rounded-lg border-2 border-[#2D2D2D] px-2 py-1 transition-colors hard-shadow-sm ${
+                    msg.feedback === "thumbs_down"
+                      ? "bg-[#FFD8CC]"
+                      : "bg-white/60 hover:bg-[#FFD8CC]/50"
+                  }`}
+                >
+                  <ThumbsDown size={11} strokeWidth={2.5} />
+                </button>
+              </div>
+            )}
           </div>
         ))}
 

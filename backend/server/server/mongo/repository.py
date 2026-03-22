@@ -7,6 +7,7 @@ from .models import (
     SampleUpsert,
     SessionAppendTurn,
     SessionCreate,
+    UserReport,
     UserUpsert,
     utcnow,
 )
@@ -164,6 +165,101 @@ class WonderMongoRepository:
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         return self.sessions.find_one({"session_id": session_id})
+
+    def update_turn_feedback(
+        self,
+        session_id: str,
+        turn_index: int,
+        feedback: str,
+        message_id: str,
+    ) -> bool:
+        """Patch feedback onto an existing session turn by its array index."""
+        result = self.sessions.update_one(
+            {"session_id": session_id},
+            {
+                "$set": {
+                    f"turns.{turn_index}.feedback": feedback,
+                    f"turns.{turn_index}.message_id": message_id,
+                    "updated_at": utcnow(),
+                }
+            },
+        )
+        return result.modified_count > 0
+
+    def get_user_analytics(self, user_id: str) -> dict[str, Any]:
+        """Aggregate per-user stats from the sessions collection."""
+        pipeline = [
+            {"$match": {"user_id": user_id}},
+            {"$unwind": {"path": "$turns", "preserveNullAndEmptyArrays": True}},
+            {
+                "$group": {
+                    "_id": "$session_id",
+                    "turn_count": {"$sum": 1},
+                    "liked": {
+                        "$sum": {
+                            "$cond": [{"$eq": ["$turns.feedback", "thumbs_up"]}, 1, 0]
+                        }
+                    },
+                    "disliked": {
+                        "$sum": {
+                            "$cond": [{"$eq": ["$turns.feedback", "thumbs_down"]}, 1, 0]
+                        }
+                    },
+                }
+            },
+            {
+                "$group": {
+                    "_id": None,
+                    "session_count": {"$sum": 1},
+                    "messages_sent": {"$sum": "$turn_count"},
+                    "liked": {"$sum": "$liked"},
+                    "disliked": {"$sum": "$disliked"},
+                }
+            },
+        ]
+        rows = list(self.sessions.aggregate(pipeline))
+        base = rows[0] if rows else {}
+
+        sounds_pipeline = [
+            {"$match": {"user_id": user_id}},
+            {"$unwind": "$turns"},
+            {"$unwind": "$turns.load_results"},
+            {"$match": {"turns.load_results.success": True}},
+            {"$count": "sounds_saved"},
+        ]
+        sounds_rows = list(self.sessions.aggregate(sounds_pipeline))
+        sounds_saved = sounds_rows[0]["sounds_saved"] if sounds_rows else 0
+
+        return {
+            "session_count": base.get("session_count", 0),
+            "messages_sent": base.get("messages_sent", 0),
+            "liked": base.get("liked", 0),
+            "disliked": base.get("disliked", 0),
+            "sounds_saved": sounds_saved,
+        }
+
+    # --- reports ---
+
+    @property
+    def reports(self):
+        return self._db["reports"]
+
+    def create_report(self, payload: UserReport) -> dict[str, Any]:
+        import uuid
+
+        now = utcnow()
+        doc = {
+            "report_id": str(uuid.uuid4()),
+            "user_id": payload.user_id,
+            "type": payload.type,
+            "subject": payload.subject,
+            "body": payload.body,
+            "url": payload.url,
+            "metadata": payload.metadata,
+            "created_at": now,
+        }
+        self.reports.insert_one(doc)
+        return doc
 
 
 _repo: WonderMongoRepository | None = None

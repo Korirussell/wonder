@@ -76,6 +76,8 @@ export interface Chat {
   lastMessagePreview: string;
 }
 
+export type MessageFeedback = "thumbs_up" | "thumbs_down";
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -84,6 +86,8 @@ export interface ChatMessage {
   isGreeting?: boolean; // If true, don't send to Gemini (just display)
   toolLog?: ToolLogEntry[];
   suggestions?: string[];
+  feedback?: MessageFeedback;
+  turnIndex?: number; // Maps to backend session turn index for feedback API
 }
 
 export interface TranscribedNote {

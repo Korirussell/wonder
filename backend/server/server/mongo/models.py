@@ -84,6 +84,8 @@ class SessionTurn(BaseModel):
     latency_ms: float | None = None
     model: str | None = None
     ts: datetime | None = None
+    feedback: Literal["thumbs_up", "thumbs_down"] | None = None
+    message_id: str | None = None
 
 
 class SessionCreate(BaseModel):
@@ -96,3 +98,36 @@ class SessionCreate(BaseModel):
 
 class SessionAppendTurn(BaseModel):
     turn: SessionTurn
+
+
+# --- analytics / feedback ---
+
+
+class FeedbackRequest(BaseModel):
+    user_id: str
+    session_id: str
+    message_id: str
+    turn_index: int
+    feedback: Literal["thumbs_up", "thumbs_down"]
+
+
+class ChatLogRequest(BaseModel):
+    session_id: str
+    user_id: str
+    messages: list[dict[str, Any]]
+    response: str
+    sound_events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# --- user reports ---
+
+ReportType = Literal["bug", "feature", "other"]
+
+
+class UserReport(BaseModel):
+    user_id: str
+    type: ReportType = "other"
+    subject: str
+    body: str
+    url: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)

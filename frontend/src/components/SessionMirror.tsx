@@ -164,8 +164,8 @@ export default function SessionMirror() {
 
   return (
     <section className="flex-1 flex flex-col bg-[#FDFDFB]/30 relative overflow-hidden">
-      <header className="px-8 pt-6 pb-4 flex justify-between items-center flex-shrink-0 border-b-2 border-[#2D2D2D]/10">
-        <div className="flex gap-3">
+      <header className="px-6 py-3 flex items-center flex-shrink-0 border-b-2 border-[#2D2D2D]/10">
+        <div className="flex-1 flex gap-3">
           <button
             onClick={() => setShowTempoModal(true)}
             className="bg-white border-2 border-[#2D2D2D] px-4 py-2 rounded-xl hard-shadow-sm flex flex-col cursor-pointer hover:bg-stone-50 transition-colors interactive-push"
@@ -182,7 +182,7 @@ export default function SessionMirror() {
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex-1 flex items-center gap-2 justify-center">
           <div className="flex bg-white border-2 border-[#2D2D2D] rounded-xl overflow-hidden hard-shadow-sm">
             <button
               onClick={() => setView("arrangement")}
@@ -204,7 +204,7 @@ export default function SessionMirror() {
           </div>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex-1 flex gap-2 justify-end">
           <button
             onClick={() => void sendCommand(session.isPlaying ? "stop_playback" : "start_playback")}
             className="w-11 h-11 bg-white border-2 border-[#2D2D2D] rounded-xl flex items-center justify-center hard-shadow-sm interactive-push"

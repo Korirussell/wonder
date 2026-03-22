@@ -618,13 +618,20 @@ async function executeTool(
   }
 }
 
+interface SoundEvent {
+  description: string;
+  ableton_uri?: string;
+  success: boolean;
+}
+
 async function runClaudeLoop(
   anthropic: Anthropic,
   messages: Anthropic.MessageParam[],
   systemPrompt: string
-): Promise<string> {
+): Promise<{ text: string; soundEvents: SoundEvent[] }> {
   let sessionState = createInitialState();
   const claudeTools = toClaudeTools();
+  const soundEvents: SoundEvent[] = [];
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const response = await anthropic.messages.create({
@@ -637,12 +644,12 @@ async function runClaudeLoop(
 
     if (response.stop_reason === "end_turn") {
       const textBlock = response.content.find((block) => block.type === "text");
-      return textBlock ? (textBlock as Anthropic.TextBlock).text : "";
+      return { text: textBlock ? (textBlock as Anthropic.TextBlock).text : "", soundEvents };
     }
 
     if (response.stop_reason !== "tool_use") {
       const textBlock = response.content.find((block) => block.type === "text");
-      return textBlock ? (textBlock as Anthropic.TextBlock).text : "";
+      return { text: textBlock ? (textBlock as Anthropic.TextBlock).text : "", soundEvents };
     }
 
     const toolUseBlocks = response.content.filter((block) => block.type === "tool_use") as Anthropic.ToolUseBlock[];
@@ -651,6 +658,13 @@ async function runClaudeLoop(
         const args = (block.input as Record<string, unknown>) ?? {};
         const { result, error, sessionState: newState } = await executeTool(block.name, args, sessionState);
         sessionState = newState;
+        if (block.name === "generate_sound_effect" || block.name === "text_to_speech") {
+          soundEvents.push({
+            description: (args.description ?? args.text ?? "") as string,
+            ableton_uri: !error && result && typeof result === "object" ? (result as Record<string, unknown>).uri as string | undefined : undefined,
+            success: !error,
+          });
+        }
         return {
           type: "tool_result" as const,
           tool_use_id: block.id,
@@ -663,7 +677,7 @@ async function runClaudeLoop(
     messages.push({ role: "user", content: toolResults });
   }
 
-  return "Done.";
+  return { text: "Done.", soundEvents };
 }
 
 async function runGeminiLoop(
@@ -673,8 +687,9 @@ async function runGeminiLoop(
   systemPrompt: string,
   audioData?: string,
   mimeType?: string
-): Promise<string> {
+): Promise<{ text: string; soundEvents: SoundEvent[] }> {
   let sessionState = createInitialState();
+  const soundEvents: SoundEvent[] = [];
 
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash-lite",
@@ -712,6 +727,13 @@ async function runGeminiLoop(
         const args = (call.args as Record<string, unknown>) ?? {};
         const { result, error, sessionState: newState } = await executeTool(call.name, args, sessionState);
         sessionState = newState;
+        if (call.name === "generate_sound_effect" || call.name === "text_to_speech") {
+          soundEvents.push({
+            description: (args.description ?? args.text ?? "") as string,
+            ableton_uri: !error && result && typeof result === "object" ? (result as Record<string, unknown>).uri as string | undefined : undefined,
+            success: !error,
+          });
+        }
         return {
           functionResponse: {
             name: call.name,
@@ -724,7 +746,7 @@ async function runGeminiLoop(
     response = await chat.sendMessage(toolResults);
   }
 
-  return response.response.text();
+  return { text: response.response.text(), soundEvents };
 }
 
 export async function POST(req: NextRequest) {
@@ -763,6 +785,7 @@ export async function POST(req: NextRequest) {
 
     const lastMessage = messages[messages.length - 1];
     let finalText: string;
+    let soundEvents: SoundEvent[] = [];
 
     if (anthropicKey) {
       const anthropic = new Anthropic({ apiKey: anthropicKey });
@@ -776,7 +799,7 @@ export async function POST(req: NextRequest) {
       }
 
       claudeMessages.push({ role: "user", content: lastMessage.content });
-      finalText = await runClaudeLoop(anthropic, claudeMessages, systemPrompt);
+      ({ text: finalText, soundEvents } = await runClaudeLoop(anthropic, claudeMessages, systemPrompt));
     } else {
       const genAI = new GoogleGenerativeAI(geminiKey!);
       const rawHistory: Content[] = messages.slice(0, -1).map((message) => ({
@@ -785,7 +808,7 @@ export async function POST(req: NextRequest) {
       }));
       const firstUserIdx = rawHistory.findIndex((message) => message.role === "user");
       const history = firstUserIdx >= 0 ? rawHistory.slice(firstUserIdx) : [];
-      finalText = await runGeminiLoop(genAI, history, lastMessage.content, systemPrompt, audioData, mimeType);
+      ({ text: finalText, soundEvents } = await runGeminiLoop(genAI, history, lastMessage.content, systemPrompt, audioData, mimeType));
     }
 
     if (session_id && user_id) {
@@ -797,6 +820,7 @@ export async function POST(req: NextRequest) {
           user_id,
           messages,
           response: finalText,
+          sound_events: soundEvents,
         }),
       }).catch(() => {});
     }
