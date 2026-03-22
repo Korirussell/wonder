@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Play, Square, Circle } from "lucide-react";
 import { DndContext, closestCenter, DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import TrackColumn from "./TrackColumn";
@@ -13,73 +12,71 @@ import { Track, SessionState } from "@/types";
 const MOCK_TRACKS: Track[] = [
   {
     id: 1,
-    name: "Lo-Fi Drums",
+    name: "KICK",
     volume: 0.8,
     pan: 0,
     mute: false,
     solo: false,
     armed: false,
-    devices: ["Drum Buss", "RC-20"],
+    devices: [],
     clips: [
-      { index: 0, name: "Drums A", length: 8, isPlaying: false },
-      { index: 1, name: "Drums B", length: 8, isPlaying: false },
-      { index: 2, name: "Break",   length: 4, isPlaying: false },
+      { index: 0, name: "KICK_BASIC_44.WAV", length: 16, isPlaying: false },
     ],
   },
   {
     id: 2,
-    name: "Gritty Bass",
-    volume: 0.7,
-    pan: -0.1,
+    name: "SNARE",
+    volume: 0.75,
+    pan: 0,
     mute: false,
     solo: false,
-    armed: true,
-    devices: ["RC-20", "OTT"],
+    armed: false,
+    devices: [],
     clips: [
-      { index: 0, name: "Bass A",  length: 8,  isPlaying: false },
-      { index: 1, name: "Bass B",  length: 8,  isPlaying: false },
-      { index: 2, name: "Fill",    length: 4,  isPlaying: false },
+      { index: 1, name: "SNARE_LAYER_01", length: 4, isPlaying: false },
+      { index: 3, name: "SNARE_LAYER_01", length: 4, isPlaying: false },
     ],
   },
   {
     id: 3,
-    name: "Chord Stabs",
-    volume: 0.65,
-    pan: 0.15,
+    name: "SUB BASS",
+    volume: 0.7,
+    pan: 0,
     mute: false,
-    solo: false,
+    solo: true,
     armed: false,
-    devices: ["SketchCassette", "Vulf Comp"],
+    devices: [],
     clips: [
-      { index: 0, name: "Chords A", length: 8, isPlaying: false },
-      { index: 1, name: "Chords B", length: 16, isPlaying: false },
+      { index: 0, name: "DEEP SUB F MINOR", length: 24, isPlaying: false },
     ],
   },
   {
     id: 4,
-    name: "Synth Lead",
+    name: "LEAD SYNTH",
     volume: 0.75,
-    pan: 0.05,
+    pan: 0,
     mute: false,
-    solo: true,
-    armed: false,
-    devices: ["Digitalis"],
+    solo: false,
+    armed: true,
+    devices: [],
     clips: [
-      { index: 1, name: "Lead A",  length: 8,  isPlaying: false },
-      { index: 2, name: "Lead B",  length: 8,  isPlaying: false },
+      { index: 1, name: "MIDNIGHT SYNTH LEAD", length: 16, isPlaying: false },
     ],
   },
 ];
 
-const MOCK_WAVEFORM = [20, 35, 60, 85, 40, 90, 55, 30, 70, 45, 85, 25, 65, 40, 95, 35, 75, 50, 90, 40, 60, 80, 40, 90, 55, 30, 70, 45, 85, 25, 65, 95, 35, 75, 50, 40];
-
 export default function SessionMirror() {
   const [session, setSession] = useState<SessionState>({
-    bpm: 88,
-    key: "A Minor",
+    bpm: 120,
+    key: "F Minor",
     tracks: MOCK_TRACKS,
     isPlaying: false,
   });
+
+  const [view, setView] = useState<"arrangement" | "session">("arrangement");
+  const [showTempoModal, setShowTempoModal] = useState(false);
+  const [showScaleModal, setShowScaleModal] = useState(false);
+  const [abletonConnected, setAbletonConnected] = useState(false);
 
   const updateTrack = (id: number, patch: Partial<Track>) => {
     setSession((s) => ({
@@ -99,11 +96,6 @@ export default function SessionMirror() {
     }
   };
 
-  const [view, setView] = useState<"arrangement" | "session">("arrangement");
-  const [showTempoModal, setShowTempoModal] = useState(false);
-  const [showScaleModal, setShowScaleModal] = useState(false);
-  const [abletonConnected, setAbletonConnected] = useState(false);
-
   const sendCommand = async (cmd: string, params: Record<string, unknown> = {}) => {
     try {
       const res = await fetch("/api/ableton-command", {
@@ -113,14 +105,19 @@ export default function SessionMirror() {
       });
       const data = await res.json();
       if (cmd === "start_playback") setSession((s) => ({ ...s, isPlaying: true }));
-      if (cmd === "stop_playback")  setSession((s) => ({ ...s, isPlaying: false }));
+      if (cmd === "stop_playback") setSession((s) => ({ ...s, isPlaying: false }));
       if (cmd === "fire_clip") {
         const { track_index, clip_index } = params as { track_index: number; clip_index: number };
         setSession((s) => ({
           ...s,
           tracks: s.tracks.map((t, i) =>
             i === track_index
-              ? { ...t, clips: t.clips.map((c) => c.index === clip_index ? { ...c, isPlaying: true } : c) }
+              ? {
+                  ...t,
+                  clips: t.clips.map((c) =>
+                    c.index === clip_index ? { ...c, isPlaying: true } : c
+                  ),
+                }
               : t
           ),
         }));
@@ -131,8 +128,40 @@ export default function SessionMirror() {
           ...s,
           tracks: s.tracks.map((t, i) =>
             i === track_index
-              ? { ...t, clips: t.clips.map((c) => c.index === clip_index ? { ...c, isPlaying: false } : c) }
+              ? {
+                  ...t,
+                  clips: t.clips.map((c) =>
+                    c.index === clip_index ? { ...c, isPlaying: false } : c
+                  ),
+                }
               : t
+          ),
+        }));
+      }
+      if (cmd === "set_track_mute") {
+        const { track_index, mute } = params as { track_index: number; mute: boolean };
+        setSession((s) => ({
+          ...s,
+          tracks: s.tracks.map((t, i) =>
+            i === track_index ? { ...t, mute } : t
+          ),
+        }));
+      }
+      if (cmd === "set_track_solo") {
+        const { track_index, solo } = params as { track_index: number; solo: boolean };
+        setSession((s) => ({
+          ...s,
+          tracks: s.tracks.map((t, i) =>
+            i === track_index ? { ...t, solo } : t
+          ),
+        }));
+      }
+      if (cmd === "set_track_arm") {
+        const { track_index, armed } = params as { track_index: number; armed: boolean };
+        setSession((s) => ({
+          ...s,
+          tracks: s.tracks.map((t, i) =>
+            i === track_index ? { ...t, armed } : t
           ),
         }));
       }
@@ -142,7 +171,7 @@ export default function SessionMirror() {
     }
   };
 
-  // Poll Ableton state every 2 seconds and sync to UI
+  // Poll Ableton state
   useEffect(() => {
     const poll = async () => {
       try {
@@ -154,7 +183,6 @@ export default function SessionMirror() {
             ...prev,
             bpm: data.bpm ?? prev.bpm,
             isPlaying: data.isPlaying ?? prev.isPlaying,
-            // Only replace tracks if the API returned real ones
             ...(data.tracks?.length > 0 ? { tracks: data.tracks } : {}),
           }));
         }
@@ -163,93 +191,81 @@ export default function SessionMirror() {
       }
     };
 
-    poll(); // immediate first call
+    poll();
     const interval = setInterval(poll, 5000);
     return () => clearInterval(interval);
   }, []);
 
   return (
-    <section className="flex-1 flex flex-col bg-[#FDFDFB]/30 relative overflow-hidden">
-      {/* Top HUD */}
-      <header className="px-8 pt-6 pb-4 flex justify-between items-center flex-shrink-0 border-b-2 border-[#2D2D2D]/10">
-        <div className="flex gap-3">
+    <section className="flex-1 flex flex-col overflow-hidden relative">
+      {/* View toggle + connection status strip */}
+      <div className="flex items-center justify-between px-4 py-2 bg-[#EFEFEC] border-b border-[#D8D8D8] flex-shrink-0">
+        {/* View toggle */}
+        <div className="flex bg-white border border-[#D0D0D0] rounded-lg overflow-hidden">
+          <button
+            onClick={() => setView("arrangement")}
+            className={`px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors ${
+              view === "arrangement"
+                ? "bg-[#2D2D2D] text-white"
+                : "text-[#2D2D2D]/50 hover:bg-[#F0F0ED]"
+            }`}
+          >
+            Arrange
+          </button>
+          <button
+            onClick={() => setView("session")}
+            className={`px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors border-l border-[#D0D0D0] ${
+              view === "session"
+                ? "bg-[#2D2D2D] text-white"
+                : "text-[#2D2D2D]/50 hover:bg-[#F0F0ED]"
+            }`}
+          >
+            Session
+          </button>
+        </div>
+
+        {/* Connection + BPM/Key edit */}
+        <div className="flex items-center gap-2">
           <button
             onClick={() => setShowTempoModal(true)}
-            className="bg-white border-2 border-[#2D2D2D] px-4 py-2 rounded-xl hard-shadow-sm flex flex-col cursor-pointer hover:bg-stone-50 transition-colors interactive-push"
+            className="font-mono text-[10px] font-bold text-[#2D2D2D]/50 hover:text-[#2D2D2D] transition-colors uppercase tracking-widest"
           >
-            <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-stone-400 mb-0.5">
-              Tempo
-            </span>
-            <span className="font-mono text-xl font-bold leading-none">
-              {session.bpm.toFixed(2)}
-            </span>
+            {session.bpm.toFixed(0)} BPM
           </button>
+          <span className="text-[#2D2D2D]/20">·</span>
           <button
             onClick={() => setShowScaleModal(true)}
-            className="bg-white border-2 border-[#2D2D2D] px-4 py-2 rounded-xl hard-shadow-sm flex flex-col cursor-pointer hover:bg-stone-50 transition-colors interactive-push"
+            className="font-mono text-[10px] font-bold text-[#E03030]/70 hover:text-[#E03030] transition-colors uppercase tracking-widest"
           >
-            <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-stone-400 mb-0.5">
-              Scale
-            </span>
-            <span className="font-mono text-xl font-bold leading-none uppercase">
-              {session.key}
-            </span>
+            {session.key}
           </button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* View toggle */}
-          <div className="flex bg-white border-2 border-[#2D2D2D] rounded-xl overflow-hidden hard-shadow-sm">
-            <button
-              onClick={() => setView("arrangement")}
-              className={`px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors ${view === "arrangement" ? "bg-[#2D2D2D] text-white" : "hover:bg-stone-100"}`}
-            >
-              Arrange
-            </button>
-            <button
-              onClick={() => setView("session")}
-              className={`px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors border-l-2 border-[#2D2D2D] ${view === "session" ? "bg-[#2D2D2D] text-white" : "hover:bg-stone-100"}`}
-            >
-              Session
-            </button>
-          </div>
-
-          {/* Ableton connection pill */}
-          <div className={`flex items-center gap-2 border-2 border-[#2D2D2D] px-3 py-1.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-widest ${abletonConnected ? "bg-[#C1E1C1]" : "bg-[#fa7150]/20"}`}>
-            <div className={`w-1.5 h-1.5 rounded-full border border-[#2D2D2D] ${abletonConnected ? "bg-[#4a664c]" : "bg-[#fa7150] animate-pulse"}`} />
-            {abletonConnected ? "Ableton Live" : "Not Connected"}
+          <span className="text-[#2D2D2D]/20">·</span>
+          <div
+            className={`flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-widest ${
+              abletonConnected ? "text-[#3da84a]" : "text-[#2D2D2D]/30"
+            }`}
+          >
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${
+                abletonConnected ? "bg-[#3da84a]" : "bg-[#2D2D2D]/20 animate-pulse"
+              }`}
+            />
+            {abletonConnected ? "Live" : "Offline"}
           </div>
         </div>
+      </div>
 
-        {/* Transport controls */}
-        <div className="flex gap-2">
-          <button
-            onClick={() => sendCommand(session.isPlaying ? "stop_playback" : "start_playback")}
-            className="w-11 h-11 bg-white border-2 border-[#2D2D2D] rounded-xl flex items-center justify-center hard-shadow-sm interactive-push"
-          >
-            {session.isPlaying ? (
-              <Square size={18} strokeWidth={2.5} />
-            ) : (
-              <Play size={18} strokeWidth={2.5} fill="#2D2D2D" />
-            )}
-          </button>
-          <button className="w-11 h-11 bg-[#fa7150] border-2 border-[#2D2D2D] rounded-xl flex items-center justify-center hard-shadow-sm interactive-push">
-            <Circle size={14} fill="white" strokeWidth={0} />
-          </button>
-        </div>
-      </header>
-
-      {/* Main content area */}
+      {/* Main content */}
       <div className="flex-1 overflow-hidden">
         {view === "arrangement" ? (
-          <ArrangementView
-            session={session}
-            onCommand={sendCommand}
-          />
+          <ArrangementView session={session} onCommand={sendCommand} />
         ) : (
-          <div className="h-full px-8 pt-6 pb-28 overflow-y-auto custom-scrollbar flex flex-wrap gap-4 content-start relative">
+          <div className="h-full px-6 pt-5 pb-24 overflow-y-auto custom-scrollbar flex flex-wrap gap-4 content-start">
             <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-              <SortableContext items={session.tracks.map((t) => t.id)} strategy={rectSortingStrategy}>
+              <SortableContext
+                items={session.tracks.map((t) => t.id)}
+                strategy={rectSortingStrategy}
+              >
                 {session.tracks.map((track, i) => (
                   <TrackColumn
                     key={track.id}
@@ -261,34 +277,15 @@ export default function SessionMirror() {
               </SortableContext>
             </DndContext>
 
-            <div className="flex-1 min-w-[200px] h-64 border-2 border-dashed border-[#2D2D2D]/30 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#2D2D2D]/60 hover:bg-white/40 transition-all group">
-              <span className="font-mono text-xs text-stone-400 group-hover:text-stone-600 transition-colors">
+            <div className="flex-1 min-w-[180px] h-56 border-2 border-dashed border-[#2D2D2D]/20 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#2D2D2D]/40 hover:bg-white/40 transition-all group">
+              <span className="font-mono text-xs text-[#2D2D2D]/30 group-hover:text-[#2D2D2D]/50 transition-colors">
                 + new track
-              </span>
-            </div>
-
-            {/* Waveform strip */}
-            <div className="absolute bottom-6 left-8 right-8 h-16 bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow p-4 flex items-center gap-4">
-              <div className="flex-1 h-full flex items-center gap-[3px] overflow-hidden">
-                {MOCK_WAVEFORM.map((h, i) => (
-                  <div
-                    key={i}
-                    className="w-[3px] rounded-full flex-shrink-0"
-                    style={{
-                      height: `${h}%`,
-                      backgroundColor: "#4a664c",
-                      opacity: session.isPlaying ? 0.4 + (i % 3) * 0.2 : 0.3 + (i % 5) * 0.12,
-                    }}
-                  />
-                ))}
-              </div>
-              <span className="font-mono text-[11px] font-bold opacity-40 whitespace-nowrap">
-                {session.isPlaying ? "▶ PLAYING" : "◼ STOPPED"}
               </span>
             </div>
           </div>
         )}
       </div>
+
       {showTempoModal && (
         <TempoModal
           initialBpm={session.bpm}
