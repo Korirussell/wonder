@@ -1,0 +1,12 @@
+LICENSE
+README.md
+pyproject.toml
+MCP_Server/__init__.py
+MCP_Server/rest_api_server.py
+MCP_Server/server.py
+ableton_mcp.egg-info/PKG-INFO
+ableton_mcp.egg-info/SOURCES.txt
+ableton_mcp.egg-info/dependency_links.txt
+ableton_mcp.egg-info/entry_points.txt
+ableton_mcp.egg-info/requires.txt
+ableton_mcp.egg-info/top_level.txt
