@@ -54,6 +54,35 @@ wonder/
             └── CopilotChat.tsx  ← main chat UI (text, voice, rhythm tap)
 ```
 
+> `kori-mcp` is a fork of [jpoindexter/ableton-mcp](https://github.com/jpoindexter/ableton-mcp), upgraded for Wonder with Live 12 bug fixes and new commands. The frontend now talks directly to Ableton over TCP, so the legacy Ableton FastMCP wrapper is no longer part of the setup.
+
+---
+
+## Setup
+
+### Requirements
+
+- macOS (Ableton's Remote Script path is macOS-specific)
+- Python 3.10+
+- Ableton Live 12
+- [Claude Desktop](https://claude.ai/download) (for using it as an LLM client during dev)
+
+---
+
+### Step 1 — Clone the repo and install dependencies
+
+```bash
+git clone <wonder-repo-url>
+cd wonder
+pip install -e kori-mcp
+```
+
+Verify:
+
+```bash
+python3 -c "from mcp.server.fastmcp import FastMCP; print('ok')"
+```
+
 ---
 
 ## Prerequisites
@@ -97,7 +126,15 @@ When loaded correctly, Ableton's status bar shows:
 
 > **Note:** Ableton may show *"A custom MIDI Remote Script uses an older process…"* — click **Proceed**. This is safe to ignore.
 
-### Verify the connection
+### Step 3 — Start Wonder
+
+Run the frontend and keep Ableton open with the `AbletonMCP` control surface enabled. Wonder sends commands straight to Ableton on `localhost:9877`; no separate Ableton MCP server process is required.
+
+---
+
+### Step 4 — Verify everything works
+
+Make sure Ableton is open with a project loaded, then run the test suite:
 
 ```bash
 python3 -c "

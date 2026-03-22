@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans, Be_Vietnam_Pro, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { AuthProvider } from "@/lib/AuthContext";
+import { ChatProvider } from "@/lib/ChatContext";
 
 const plusJakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
@@ -37,7 +39,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       lang="en"
       className={`${plusJakarta.variable} ${beVietnam.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable} h-full`}
     >
-      <body className="h-full overflow-hidden">{children}</body>
+      <body className="h-full overflow-hidden">
+        <AuthProvider>
+          <ChatProvider>{children}</ChatProvider>
+        </AuthProvider>
+      </body>
     </html>
   );
 }

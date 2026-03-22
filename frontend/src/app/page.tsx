@@ -2,6 +2,7 @@ import { AbletonProvider } from "@/lib/AbletonContext";
 import Header from "@/components/Header";
 import CopilotChat from "@/components/CopilotChat";
 import SessionMirror from "@/components/SessionMirror";
+import ChatSidebar from "@/components/ChatSidebar";
 
 export default function Home() {
   return (
@@ -9,6 +10,7 @@ export default function Home() {
       <div className="h-screen flex flex-col overflow-hidden">
         <Header />
         <main className="flex flex-1 overflow-hidden">
+          <ChatSidebar />
           <CopilotChat />
           <SessionMirror />
         </main>

@@ -230,6 +230,8 @@ class AbletonMCP(ControlSurface):
                                  "create_clip", "add_notes_to_clip", "set_clip_name",
                                  "set_tempo", "fire_clip", "stop_clip",
                                  "start_playback", "stop_playback", "load_browser_item",
+                                 "load_instrument_by_name",
+                                 "search_browser", "get_browser_items_at_path",
                                  "delete_track", "delete_clip"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
@@ -290,7 +292,18 @@ class AbletonMCP(ControlSurface):
                             track_index = params.get("track_index", 0)
                             clip_index = params.get("clip_index", 0)
                             result = self._delete_clip(track_index, clip_index)
-                        
+                        elif command_type == "load_instrument_by_name":
+                            track_index = params.get("track_index", 0)
+                            name = params.get("name", "")
+                            result = self._load_instrument_by_name(track_index, name)
+                        elif command_type == "search_browser":
+                            query = params.get("query", "")
+                            category = params.get("category", "all")
+                            result = self._search_browser(query, category)
+                        elif command_type == "get_browser_items_at_path":
+                            path = params.get("path", "")
+                            result = self.get_browser_items_at_path(path)
+
                         # Put the result in the queue
                         response_queue.put({"status": "success", "result": result})
                     except Exception as e:
@@ -331,13 +344,6 @@ class AbletonMCP(ControlSurface):
             elif command_type == "get_browser_tree":
                 category_type = params.get("category_type", "all")
                 response["result"] = self.get_browser_tree(category_type)
-            elif command_type == "get_browser_items_at_path":
-                path = params.get("path", "")
-                response["result"] = self.get_browser_items_at_path(path)
-            elif command_type == "search_browser":
-                query = params.get("query", "")
-                category = params.get("category", "all")
-                response["result"] = self._search_browser(query, category)
             else:
                 response["status"] = "error"
                 response["message"] = "Unknown command: " + command_type
@@ -770,6 +776,64 @@ class AbletonMCP(ControlSurface):
             self.log_message(traceback.format_exc())
             raise
     
+    def _load_instrument_by_name(self, track_index, name):
+        """Load a built-in Ableton instrument onto a track by searching for it by name.
+        Searches instruments and sounds categories at limited depth for speed."""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+
+            track = self._song.tracks[track_index]
+            app = self.application()
+            browser = app.browser
+            name_lower = name.lower()
+
+            def find_in(item, depth=0):
+                if depth > 4 or not item:
+                    return None
+                try:
+                    item_name = item.name if hasattr(item, 'name') else ""
+                    if name_lower in item_name.lower() and hasattr(item, 'is_loadable') and item.is_loadable:
+                        return item
+                    if hasattr(item, 'children'):
+                        for child in item.children:
+                            found = find_in(child, depth + 1)
+                            if found:
+                                return found
+                except Exception:
+                    pass
+                return None
+
+            roots = []
+            if hasattr(browser, 'instruments'):
+                roots.append(browser.instruments)
+            if hasattr(browser, 'sounds'):
+                roots.append(browser.sounds)
+            if hasattr(browser, 'drums'):
+                roots.append(browser.drums)
+
+            item = None
+            for root in roots:
+                item = find_in(root)
+                if item:
+                    break
+
+            if not item:
+                raise ValueError("Instrument '{0}' not found in browser. Try a built-in name like 'Wavetable', 'Operator', 'Analog', 'Drift', 'Simpler', 'Drum Rack'.".format(name))
+
+            self._song.view.selected_track = track
+            app.browser.load_item(item)
+
+            return {
+                "loaded": True,
+                "instrument_name": item.name,
+                "track_name": track.name,
+                "track_index": track_index,
+            }
+        except Exception as e:
+            self.log_message("Error loading instrument by name: " + str(e))
+            raise
+
     def _find_browser_item_by_uri(self, browser_or_item, uri, max_depth=10, current_depth=0):
         """Find a browser item by its URI"""
         try:

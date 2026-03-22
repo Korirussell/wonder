@@ -164,15 +164,11 @@ soundsplit /path/to/audio.mp3 -o ./output
 ## ⚡ Quick Start Commands
 
 ```bash
-# Terminal 1: Backend (already running)
-cd /Users/kori/codecage/wonder/ableton-mcp
-python3 MCP_Server/server.py
-
-# Terminal 2: Frontend
+# Terminal 1: Frontend
 cd /Users/kori/codecage/wonder/frontend
 npm run dev
 
-# Terminal 3: Index samples (one-time)
+# Terminal 2: Index samples (one-time)
 cd /Users/kori/codecage/wonder
 python3 tagging/tagging.py
 

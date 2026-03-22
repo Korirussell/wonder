@@ -1,3 +1,10 @@
+export interface Clip {
+  index: number;     // Scene slot (0, 1, 2, …)
+  name: string;
+  length: number;    // In beats (4.0 = 1 bar at 4/4)
+  isPlaying: boolean;
+}
+
 export interface Track {
   id: number;
   name: string;
@@ -8,6 +15,7 @@ export interface Track {
   armed: boolean;
   devices: string[];
   color?: string; // optional accent color class
+  clips: Clip[];
 }
 
 export interface SessionState {
@@ -28,6 +36,44 @@ export interface ChatResponse {
   content: string;
   toolLog?: ToolLogEntry[];
   suggestions?: string[];
+}
+
+export type ChatErrorCode =
+  | "rate_limited"
+  | "invalid_request"
+  | "authentication"
+  | "permission"
+  | "not_found"
+  | "failed_precondition"
+  | "conflict"
+  | "cancelled"
+  | "timeout"
+  | "unavailable"
+  | "provider_internal"
+  | "network"
+  | "backend"
+  | "unknown";
+
+export interface ChatApiError {
+  code: ChatErrorCode;
+  title: string;
+  message: string;
+  provider: "gemini" | "google-adk" | "anthropic" | "backend" | "unknown";
+  status?: number;
+  retryAfterSec?: number;
+  canRetry?: boolean;
+  rawMessage?: string;
+}
+
+export type ChatApiResponse =
+  | { ok: true; content: string }
+  | { ok: false; error: ChatApiError };
+
+export interface Chat {
+  id: string;
+  title: string;
+  createdAt: Date;
+  lastMessagePreview: string;
 }
 
 export interface ChatMessage {
