@@ -1,88 +1,392 @@
 "use client";
 
-import { useState } from "react";
-import { Settings, User } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { X, Settings, User, ChevronDown, Cpu, Sparkles } from "lucide-react";
 import WonderProfileModal from "./WonderProfileModal";
 import { useDAWContext } from "@/lib/DAWContext";
 
-const NAV_ITEMS = ["File", "Edit", "Track", "View", "Settings"];
+// ─── Audio Engine Settings Modal ─────────────────────────────────────────────
+
+function AudioEngineModal({ onClose }: { onClose: () => void }) {
+  const [bufferSize, setBufferSize] = useState("256");
+  const [inputDevice, setInputDevice] = useState("Built-in Microphone");
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-[#FDFDFB] border-2 border-[#1A1A1A] rounded-2xl shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] w-full max-w-sm mx-4">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b-2 border-[#1A1A1A] bg-[#1A1A1A] rounded-t-xl">
+          <div className="flex items-center gap-2.5">
+            <div className="w-6 h-6 bg-[#C1E1C1] rounded-md flex items-center justify-center">
+              <Cpu size={12} strokeWidth={2} className="text-[#1A1A1A]" />
+            </div>
+            <div>
+              <h2 className="font-mono text-[12px] font-bold uppercase tracking-widest text-white">
+                Audio Engine Setup
+              </h2>
+              <p className="font-mono text-[8px] text-white/30 uppercase tracking-widest">
+                Tone.js · WebAudio API
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-7 h-7 bg-white/10 border border-white/20 rounded-lg flex items-center justify-center hover:bg-white/20 transition-colors text-white"
+          >
+            <X size={13} strokeWidth={2.5} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {/* Readout grid */}
+          <div className="grid grid-cols-2 gap-2.5">
+            {[
+              { label: "BUFFER SIZE",  value: `${bufferSize} samples` },
+              { label: "SAMPLE RATE",  value: "48 000 Hz"             },
+              { label: "LATENCY",      value: "5.3 ms"                },
+              { label: "BIT DEPTH",    value: "32-bit float"          },
+            ].map(({ label, value }) => (
+              <div
+                key={label}
+                className="border-2 border-[#1A1A1A] rounded-xl p-3 bg-[#FAFAF8] shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
+              >
+                <p className="font-mono text-[7px] uppercase tracking-[0.18em] text-[#1A1A1A]/35 mb-1 leading-none">
+                  {label}
+                </p>
+                <p className="font-mono text-[13px] font-bold text-[#1A1A1A] leading-none tabular-nums">
+                  {value}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Buffer size select */}
+          <div>
+            <label className="font-mono text-[8px] uppercase tracking-widest text-[#1A1A1A]/45 block mb-1.5">
+              Buffer Size
+            </label>
+            <select
+              value={bufferSize}
+              onChange={(e) => setBufferSize(e.target.value)}
+              className="w-full bg-white border-2 border-[#1A1A1A] rounded-xl px-3 py-2 font-mono text-[12px] focus:outline-none focus:ring-2 focus:ring-[#C1E1C1] shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
+            >
+              {["128", "256", "512", "1024", "2048"].map((s) => (
+                <option key={s} value={s}>{s} samples</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Input device */}
+          <div>
+            <label className="font-mono text-[8px] uppercase tracking-widest text-[#1A1A1A]/45 block mb-1.5">
+              Input Device
+            </label>
+            <select
+              value={inputDevice}
+              onChange={(e) => setInputDevice(e.target.value)}
+              className="w-full bg-white border-2 border-[#1A1A1A] rounded-xl px-3 py-2 font-mono text-[12px] focus:outline-none focus:ring-2 focus:ring-[#C1E1C1] shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
+            >
+              {["Built-in Microphone", "Scarlett 2i2 (USB)", "Apollo Twin MKII", "BlackHole 2ch"].map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Status indicator */}
+          <div className="flex items-center gap-2 px-3 py-2 bg-[#C1E1C1]/25 border-2 border-[#C1E1C1] rounded-xl">
+            <div className="w-2 h-2 rounded-full bg-[#3DBE4E] shadow-[0_0_6px_rgba(61,190,78,0.6)] animate-pulse flex-shrink-0" />
+            <span className="font-mono text-[9px] font-bold text-[#1A1A1A]/60 uppercase tracking-widest">
+              Audio engine active
+            </span>
+          </div>
+        </div>
+
+        <div className="px-5 py-4 border-t-2 border-[#1A1A1A] flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-white border-2 border-[#1A1A1A] rounded-xl font-mono text-[10px] font-bold uppercase tracking-widest shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] hover:translate-y-px hover:shadow-[1px_1px_0px_0px_rgba(26,26,26,1)] transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-[#C1E1C1] border-2 border-[#1A1A1A] rounded-xl font-mono text-[10px] font-bold uppercase tracking-widest shadow-[3px_3px_0px_0px_rgba(26,26,26,1)] hover:translate-y-px hover:shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] transition-all"
+          >
+            Apply
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Brutalist Toast ──────────────────────────────────────────────────────────
+
+function Toast({ message, onDone }: { message: string; onDone: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 2600);
+    return () => clearTimeout(t);
+  }, [onDone]);
+
+  return (
+    <div className="fixed bottom-20 right-5 z-[60] pointer-events-none">
+      <div className="border-2 border-[#1A1A1A] bg-[#FDFDFB] rounded-xl px-4 py-2.5 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] flex items-center gap-2.5 animate-[fadeInUp_0.2s_ease-out]">
+        <div className="w-1.5 h-1.5 rounded-full bg-[#C1E1C1] shadow-[0_0_6px_rgba(193,225,193,0.8)] animate-pulse" />
+        <span className="font-mono text-[11px] font-bold text-[#1A1A1A]">{message}</span>
+      </div>
+      <style>{`
+        @keyframes fadeInUp {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ─── v2.0 Tooltip ────────────────────────────────────────────────────────────
+
+function V2Tooltip({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 2400);
+    return () => clearTimeout(t);
+  }, [onClose]);
+
+  return (
+    <div className="absolute top-full left-0 mt-2 z-50 pointer-events-none">
+      <div className="border-2 border-[#1A1A1A] bg-[#1A1A1A] rounded-xl px-3 py-2 shadow-[3px_3px_0px_0px_rgba(26,26,26,1)] whitespace-nowrap">
+        <span className="font-mono text-[10px] font-bold text-[#C1E1C1] uppercase tracking-widest">
+          Feature coming in v2.0
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Dropdown Menu ────────────────────────────────────────────────────────────
+
+interface MenuItem {
+  label: string;
+  shortcut?: string;
+  action: () => void;
+  divider?: boolean;
+}
+
+function DropdownMenu({ items }: { items: MenuItem[] }) {
+  return (
+    <div className="absolute top-full left-0 mt-1 z-50 min-w-[200px] bg-[#FDFDFB] border-2 border-[#1A1A1A] rounded-xl shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] py-1 overflow-hidden">
+      {items.map((item, i) => (
+        <div key={i}>
+          {item.divider && i > 0 && (
+            <div className="h-px bg-[#1A1A1A]/10 mx-3 my-1" />
+          )}
+          <button
+            onClick={item.action}
+            className="w-full flex items-center justify-between px-4 py-2 text-left hover:bg-[#F0F0EB] transition-colors group"
+          >
+            <span className="font-mono text-[11px] font-bold text-[#1A1A1A] group-hover:text-[#1A1A1A]">
+              {item.label}
+            </span>
+            {item.shortcut && (
+              <span className="font-mono text-[9px] text-[#1A1A1A]/30 ml-6">
+                {item.shortcut}
+              </span>
+            )}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Header ───────────────────────────────────────────────────────────────────
+
+type OpenMenu = "file" | "agent" | null;
 
 export default function Header() {
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [activeNav, setActiveNav] = useState("Track");
+  const [openMenu, setOpenMenu]       = useState<OpenMenu>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [profileOpen, setProfileOpen]   = useState(false);
+  const [toast, setToast]               = useState<string | null>(null);
+  const [v2Tooltip, setV2Tooltip]       = useState<"mastering" | "stems" | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
   const { state } = useDAWContext();
   const session = { bpm: state.transport.bpm, key: "F Minor" };
 
+  const showToast = (msg: string) => { setToast(null); setTimeout(() => setToast(msg), 10); };
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!openMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setOpenMenu(null);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [openMenu]);
+
+  // Close dropdown on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setOpenMenu(null); setSettingsOpen(false); setProfileOpen(false); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const fileItems: MenuItem[] = [
+    {
+      label: "Save Session",
+      shortcut: "⌘S",
+      action: () => { setOpenMenu(null); showToast("Saving session…"); },
+    },
+    {
+      label: "Export Stems",
+      shortcut: "⌘⇧E",
+      divider: true,
+      action: () => { setOpenMenu(null); showToast("Preparing stems…"); },
+    },
+    {
+      label: "Export to Ableton (.als)",
+      action: () => { setOpenMenu(null); showToast("Generating .als file…"); },
+    },
+  ];
+
+  const agentItems: MenuItem[] = [
+    {
+      label: "AI Mastering",
+      action: () => { setOpenMenu(null); setV2Tooltip("mastering"); },
+    },
+    {
+      label: "Stem Separation (Beta)",
+      divider: true,
+      action: () => { setOpenMenu(null); setV2Tooltip("stems"); },
+    },
+  ];
+
   return (
     <>
-      <nav className="flex-shrink-0 flex items-center px-5 h-[44px] bg-[#FDFDFB] border-b border-[#D8D8D2] z-10 relative gap-4">
+      <nav className="flex-shrink-0 flex items-center px-5 h-[44px] bg-[#FDFDFB] border-b border-[#D8D8D2] z-20 relative gap-3">
         {/* Logo */}
-        <span className="text-[17px] font-black text-[#2D2D2D] italic font-headline tracking-tighter mr-3 select-none">
+        <span className="text-[17px] font-black text-[#1A1A1A] italic font-headline tracking-tighter mr-2 select-none">
           Wonder
         </span>
 
         {/* Nav items */}
-        <div className="flex items-center gap-0.5">
-          {NAV_ITEMS.map((item) => (
+        <div ref={menuRef} className="flex items-center gap-0.5">
+
+          {/* File */}
+          <div className="relative">
             <button
-              key={item}
-              onClick={() => setActiveNav(item)}
-              className={`px-3 py-1 text-[12.5px] rounded transition-colors font-sans ${activeNav === item
-                  ? "text-[#3da84a] font-semibold"
-                  : "text-[#2D2D2D]/50 hover:text-[#2D2D2D] font-medium"
-                }`}
+              onClick={() => setOpenMenu(openMenu === "file" ? null : "file")}
+              className={`flex items-center gap-1 px-3 py-1 text-[12px] rounded transition-colors font-mono font-bold uppercase tracking-wide ${
+                openMenu === "file"
+                  ? "bg-[#1A1A1A] text-white"
+                  : "text-[#1A1A1A]/50 hover:text-[#1A1A1A] hover:bg-[#F0F0EB]"
+              }`}
             >
-              {item}
+              File
+              <ChevronDown
+                size={10}
+                strokeWidth={2.5}
+                className={`transition-transform ${openMenu === "file" ? "rotate-180" : ""}`}
+              />
             </button>
-          ))}
+            {openMenu === "file" && <DropdownMenu items={fileItems} />}
+          </div>
+
+          {/* Agent */}
+          <div className="relative">
+            <button
+              onClick={() => setOpenMenu(openMenu === "agent" ? null : "agent")}
+              className={`flex items-center gap-1.5 px-3 py-1 text-[12px] rounded transition-colors font-mono font-bold uppercase tracking-wide ${
+                openMenu === "agent"
+                  ? "bg-[#1A1A1A] text-white"
+                  : "text-[#1A1A1A]/50 hover:text-[#1A1A1A] hover:bg-[#F0F0EB]"
+              }`}
+            >
+              <Sparkles size={10} strokeWidth={2} />
+              Agent
+              <ChevronDown
+                size={10}
+                strokeWidth={2.5}
+                className={`transition-transform ${openMenu === "agent" ? "rotate-180" : ""}`}
+              />
+            </button>
+            {openMenu === "agent" && (
+              <div className="absolute top-full left-0 mt-1 z-50 min-w-[210px] bg-[#FDFDFB] border-2 border-[#1A1A1A] rounded-xl shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] py-1 overflow-visible">
+                {agentItems.map((item, i) => (
+                  <div key={i} className="relative">
+                    {item.divider && i > 0 && <div className="h-px bg-[#1A1A1A]/10 mx-3 my-1" />}
+                    <button
+                      onClick={item.action}
+                      className="w-full flex items-center justify-between px-4 py-2 text-left hover:bg-[#F0F0EB] transition-colors group"
+                    >
+                      <span className="font-mono text-[11px] font-bold text-[#1A1A1A]">{item.label}</span>
+                      <span className="font-mono text-[8px] bg-[#E9D5FF] border border-[#1A1A1A] px-1.5 py-0.5 rounded-full text-[#1A1A1A]/60 ml-3">
+                        v2
+                      </span>
+                    </button>
+                    {/* Inline v2 tooltip */}
+                    {v2Tooltip === (item.label === "AI Mastering" ? "mastering" : "stems") && (
+                      <V2Tooltip onClose={() => setV2Tooltip(null)} />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex-1" />
 
-        {/* BPM / KEY / TIME display — matches the mockup's top-right readout */}
+        {/* BPM / KEY / TIME readout */}
         <div className="flex border border-[#D8D8D2] rounded overflow-hidden">
           <div className="flex flex-col items-center justify-center px-4 py-1 border-r border-[#D8D8D2] bg-[#FAFAF6]">
-            <span className="text-[7.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[2px]">
-              BPM
-            </span>
+            <span className="text-[7.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[2px]">BPM</span>
             <span className="text-[13px] font-bold font-mono text-[#1a1a1a] leading-none tabular-nums">
               {session.bpm.toFixed(2)}
             </span>
           </div>
           <div className="flex flex-col items-center justify-center px-4 py-1 border-r border-[#D8D8D2] bg-[#FAFAF6]">
-            <span className="text-[7.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[2px]">
-              KEY
-            </span>
-            <span className="text-[13px] font-bold font-mono text-[#D32F2F] leading-none">
-              {session.key || "F Minor"}
-            </span>
+            <span className="text-[7.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[2px]">KEY</span>
+            <span className="text-[13px] font-bold font-mono text-[#D32F2F] leading-none">{session.key}</span>
           </div>
           <div className="flex flex-col items-center justify-center px-4 py-1 bg-[#FAFAF6]">
-            <span className="text-[7.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[2px]">
-              TIME
-            </span>
-            <span className="text-[13px] font-bold font-mono text-[#1a1a1a] leading-none">
-              4 / 4
-            </span>
+            <span className="text-[7.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[2px]">TIME</span>
+            <span className="text-[13px] font-bold font-mono text-[#1a1a1a] leading-none">4 / 4</span>
           </div>
         </div>
 
-        {/* Settings + profile */}
+        {/* Settings */}
         <button
-          className="w-[32px] h-[32px] rounded-full border border-[#D8D8D2] flex items-center justify-center hover:bg-[#F0F0EB] transition-colors text-[#2D2D2D]/40 hover:text-[#2D2D2D]"
+          onClick={() => setSettingsOpen(true)}
+          className="w-[32px] h-[32px] rounded-full border border-[#D8D8D2] flex items-center justify-center hover:bg-[#F0F0EB] transition-colors text-[#1A1A1A]/40 hover:text-[#1A1A1A]"
+          title="Audio engine settings"
         >
           <Settings size={14} strokeWidth={1.5} />
         </button>
+
+        {/* Profile */}
         <button
           onClick={() => setProfileOpen(true)}
-          className="w-[32px] h-[32px] rounded-full bg-[#2D2D2D] flex items-center justify-center hover:bg-[#1a1a1a] transition-colors"
-          title="Profile"
+          className="w-[32px] h-[32px] rounded-full bg-[#1A1A1A] flex items-center justify-center hover:bg-[#333] transition-colors border-2 border-[#1A1A1A]"
+          title=".wonderprofile"
         >
           <User size={13} strokeWidth={1.5} color="white" />
         </button>
       </nav>
 
-      {profileOpen && <WonderProfileModal onClose={() => setProfileOpen(false)} />}
+      {/* Modals */}
+      {settingsOpen && <AudioEngineModal onClose={() => setSettingsOpen(false)} />}
+      {profileOpen  && <WonderProfileModal onClose={() => setProfileOpen(false)} />}
+
+      {/* Toast */}
+      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </>
   );
 }

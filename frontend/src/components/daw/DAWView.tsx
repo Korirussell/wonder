@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import * as Tone from "tone";
 import { useDAWContext } from "@/lib/DAWContext";
 import { useDAWEngine } from "@/lib/useDAWEngine";
 import { useAudioAnalysis } from "@/lib/useAudioAnalysis";
@@ -31,6 +32,34 @@ export default function DAWView() {
   });
   const [drumsOpen, setDrumsOpen] = useState(false);
   const { analysis, analyzing, analyze } = useAudioAnalysis();
+
+  // ─── Global spacebar play/pause ──────────────────────────────────────────────
+  // Mirrors Ableton's spacebar shortcut. Skips if focus is inside a text input.
+  const handleSpacebar = useCallback((e: KeyboardEvent) => {
+    if (e.code !== "Space") return;
+
+    // Input trap: let the user type spaces in chat/inputs
+    const el = document.activeElement;
+    const tag = el?.tagName.toLowerCase() ?? "";
+    if (
+      tag === "input" ||
+      tag === "textarea" ||
+      (el as HTMLElement)?.isContentEditable
+    ) return;
+
+    e.preventDefault(); // stop browser scroll
+
+    if (Tone.getTransport().state === "started") {
+      stopPlayback();
+    } else {
+      startPlayback();
+    }
+  }, [startPlayback, stopPlayback]);
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleSpacebar);
+    return () => window.removeEventListener("keydown", handleSpacebar);
+  }, [handleSpacebar]);
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 

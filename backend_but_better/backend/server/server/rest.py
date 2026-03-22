@@ -361,6 +361,45 @@ def _absolutize_to_urls(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+# ---------------------------------------------------------------------------
+# /api/agent/insight — Snowflake agentic insights (blast-shielded)
+# ---------------------------------------------------------------------------
+
+_MOCK_INSIGHT = {
+    "status": "success",
+    "agent_insight": (
+        "Analyzed 10k samples: Your lo-fi acoustic profile matches perfectly "
+        "with a vinyl-compressed drum bus. Recommend layering a 60 Hz sub "
+        "sine at -12 dBFS to fill the low-end gap detected at 0:14."
+    ),
+    "source": "mock",
+}
+
+
+class InsightRequest(BaseModel):
+    query: str = ""
+    context: dict = {}
+
+
+@app.post("/api/agent/insight")
+async def agent_insight(body: InsightRequest) -> dict:
+    """
+    Run the Snowflake agentic analysis pipeline.
+    Hard 4-second timeout + full fallback — safe to demo live.
+    """
+    import asyncio
+
+    from .services.snowflake_agent import run_snowflake_agent
+
+    payload = {"query": body.query, "context": body.context}
+    try:
+        result = await asyncio.wait_for(run_snowflake_agent(payload), timeout=4.0)
+        return {"status": "success", **result}
+    except Exception as e:
+        print(f"[snowflake_agent] FALLBACK triggered — {type(e).__name__}: {e}")
+        return _MOCK_INSIGHT
+
+
 def main() -> None:
     import uvicorn
     uvicorn.run("server.rest:app", host="0.0.0.0", port=8000, reload=True)

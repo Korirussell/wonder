@@ -455,6 +455,18 @@ export default function CopilotChat() {
     const text = overrideText ?? input.trim();
     if (!text || isLoading) return;
 
+    // Inject Spotify taste into every prompt if connected
+    let spotifyPrefix = "";
+    try {
+      const raw = localStorage.getItem("wonderprofile");
+      if (raw) {
+        const p = JSON.parse(raw) as { spotify_artists?: string[]; spotify_tracks?: string[] };
+        if (p.spotify_artists?.length) {
+          spotifyPrefix = `[User's Spotify Taste: Artists: ${p.spotify_artists.join(", ")} | Tracks: ${(p.spotify_tracks ?? []).join(", ")}. Apply this groove and instrumentation to the request.]\n`;
+        }
+      }
+    } catch { /* ignore */ }
+
     const rhythmSuffix = pendingRhythm
       ? `\n\n[Captured rhythm: ${pendingRhythm.note_starts_beats.length} notes, ${pendingRhythm.reference_bpm} BPM ref, ${pendingRhythm.quantization_hint} quantize]`
       : "";
@@ -463,7 +475,7 @@ export default function CopilotChat() {
     setPendingAudio(null);
     setPendingRhythm(null);
 
-    await chatSendMessage({ text: text + rhythmSuffix });
+    await chatSendMessage({ text: spotifyPrefix + text + rhythmSuffix });
   };
 
   // ── Audio recording ────────────────────────────────────────────────────────
