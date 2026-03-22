@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Paperclip, Mic, Send, StopCircle, Music2, X } from "lucide-react";
-import { ChatMessage } from "@/types";
+import { AlertCircle, Paperclip, Mic, Send, StopCircle, Music2, X } from "lucide-react";
+import type { ChatApiError, ChatApiResponse, ChatMessage } from "@/types";
 import { DEFAULT_CHAT_GREETING, useChat } from "@/lib/ChatContext";
 import { useAuth } from "@/lib/AuthContext";
 
@@ -83,10 +83,23 @@ function analyzeTapNotes(notes: TapNote[]): PendingRhythm | null {
   };
 }
 
+function buildNetworkError(message: string): ChatApiError {
+  return {
+    code: "network",
+    title: "Network error",
+    message,
+    provider: "backend",
+    canRetry: true,
+  };
+}
+
 export default function CopilotChat() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [chatError, setChatError] = useState<ChatApiError | null>(null);
+  const [toastError, setToastError] = useState<ChatApiError | null>(null);
+  const [retryAfterSec, setRetryAfterSec] = useState<number | null>(null);
   const { user } = useAuth();
   const {
     activeChatId,
@@ -120,10 +133,39 @@ export default function CopilotChat() {
     }
   }, [input]);
 
+  useEffect(() => {
+    if (retryAfterSec === null || retryAfterSec <= 0) return;
+    const timer = window.setTimeout(() => {
+      setRetryAfterSec((prev) => (prev && prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [retryAfterSec]);
+
+  useEffect(() => {
+    if (!toastError || toastError.retryAfterSec) return;
+    const timer = window.setTimeout(() => {
+      setToastError(null);
+    }, 4500);
+    return () => window.clearTimeout(timer);
+  }, [toastError]);
+
+  const presentError = (error: ChatApiError) => {
+    setChatError(error);
+    setToastError(error);
+    setRetryAfterSec(error.retryAfterSec ?? null);
+  };
+
+  const clearErrors = () => {
+    setChatError(null);
+    setToastError(null);
+    setRetryAfterSec(null);
+  };
+
   const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || (retryAfterSec ?? 0) > 0) return;
     const chatId = activeChatId ?? await createChat();
     const currentMessages = getMessages(chatId);
+    clearErrors();
 
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -165,7 +207,12 @@ export default function CopilotChat() {
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json() as ChatApiResponse;
+
+      if (!res.ok || !data.ok) {
+        presentError(data.ok ? buildNetworkError("Wonder returned an unexpected error.") : data.error);
+        return;
+      }
 
       appendMessage(chatId, {
         id: Date.now().toString(),
@@ -176,13 +223,7 @@ export default function CopilotChat() {
       updateChatPreview(chatId, data.content);
       setPendingRhythm(null);
     } catch {
-      appendMessage(chatId, {
-        id: Date.now().toString(),
-        role: "assistant",
-        content: "Connection error — make sure the Wonder backend is running.",
-        timestamp: new Date(),
-      });
-      updateChatPreview(chatId, "Connection error — make sure the Wonder backend is running.");
+      presentError(buildNetworkError("Unable to reach Wonder. Check the backend connection and try again."));
     } finally {
       setIsLoading(false);
       setLoading(chatId, false);
@@ -312,14 +353,13 @@ export default function CopilotChat() {
       setIsRecording(true);
     } catch (error) {
       console.error("Error accessing microphone:", error);
-      const chatId = activeChatId ?? await createChat();
-      appendMessage(chatId, {
-        id: Date.now().toString(),
-        role: "assistant",
-        content: "Could not access microphone. Please check your browser permissions.",
-        timestamp: new Date(),
+      presentError({
+        code: "failed_precondition",
+        title: "Microphone unavailable",
+        message: "Wonder could not access your microphone. Check browser permissions and try again.",
+        provider: "backend",
+        canRetry: true,
       });
-      updateChatPreview(chatId, "Could not access microphone. Please check your browser permissions.");
     }
   };
 
@@ -331,8 +371,10 @@ export default function CopilotChat() {
   };
 
   const sendAudioMessage = async (audioBlob: Blob) => {
+    if ((retryAfterSec ?? 0) > 0) return;
     const chatId = activeChatId ?? await createChat();
     const currentMessages = getMessages(chatId);
+    clearErrors();
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
@@ -371,7 +413,12 @@ export default function CopilotChat() {
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json() as ChatApiResponse;
+
+      if (!res.ok || !data.ok) {
+        presentError(data.ok ? buildNetworkError("Wonder returned an unexpected error.") : data.error);
+        return;
+      }
 
       appendMessage(chatId, {
         id: Date.now().toString(),
@@ -381,13 +428,7 @@ export default function CopilotChat() {
       });
       updateChatPreview(chatId, data.content);
     } catch {
-      appendMessage(chatId, {
-        id: Date.now().toString(),
-        role: "assistant",
-        content: "Connection error — make sure the Wonder backend is running.",
-        timestamp: new Date(),
-      });
-      updateChatPreview(chatId, "Connection error — make sure the Wonder backend is running.");
+      presentError(buildNetworkError("Unable to reach Wonder. Check the backend connection and try again."));
     } finally {
       setIsLoading(false);
       setLoading(chatId, false);
@@ -395,7 +436,25 @@ export default function CopilotChat() {
   };
 
   return (
-    <section className="w-[40%] flex flex-col border-r-2 border-[#2D2D2D] bg-white/70 backdrop-blur-sm">
+    <section className="relative w-[40%] flex flex-col border-r-2 border-[#2D2D2D] bg-white/70 backdrop-blur-sm">
+      {toastError ? (
+        <div className="absolute right-5 top-5 z-20 max-w-sm rounded-2xl border-2 border-[#2D2D2D] bg-[#FEF08A] p-4 hard-shadow">
+          <div className="flex items-start gap-3">
+            <AlertCircle size={18} className="mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-headline text-sm font-bold">{toastError.title}</p>
+              <p className="mt-1 text-xs leading-relaxed opacity-75">{toastError.message}</p>
+            </div>
+            <button
+              onClick={() => setToastError(null)}
+              className="rounded-lg border-2 border-[#2D2D2D] bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
         {(activeMessages.length > 0 ? activeMessages : [DEFAULT_CHAT_GREETING]).map((msg) => (
@@ -449,6 +508,38 @@ export default function CopilotChat() {
 
       {/* Input area */}
       <div className="px-6 py-5 flex-shrink-0">
+        {chatError ? (
+          <div className="mb-4 rounded-2xl border-2 border-[#2D2D2D] bg-[#FFF1D6] p-4 hard-shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-headline text-sm font-bold">{chatError.title}</p>
+                <p className="mt-1 text-sm leading-relaxed opacity-80">{chatError.message}</p>
+                {retryAfterSec && retryAfterSec > 0 ? (
+                  <p className="mt-2 font-mono text-[10px] font-bold uppercase tracking-[0.18em] opacity-55">
+                    Retry available in {retryAfterSec}s
+                  </p>
+                ) : null}
+              </div>
+              <button
+                onClick={() => setChatError(null)}
+                className="rounded-lg border-2 border-[#2D2D2D] bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest"
+              >
+                Dismiss
+              </button>
+            </div>
+            {chatError.rawMessage ? (
+              <details className="mt-3">
+                <summary className="cursor-pointer font-mono text-[10px] font-bold uppercase tracking-[0.18em] opacity-45">
+                  Technical details
+                </summary>
+                <pre className="mt-2 whitespace-pre-wrap break-words rounded-xl border border-[#2D2D2D]/20 bg-white/60 p-3 text-[11px] leading-relaxed opacity-75">
+                  {chatError.rawMessage}
+                </pre>
+              </details>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow flex items-end p-3 gap-3 focus-within:ring-2 focus-within:ring-[#C1E1C1] transition-all">
           <button className="p-2 text-[#2D2D2D]/40 hover:text-[#2D2D2D] transition-colors self-end">
             <Paperclip size={18} />
@@ -483,7 +574,7 @@ export default function CopilotChat() {
           {/* Tap rhythm button */}
           <button
             onClick={isTapRecording ? stopTapRecording : startTapRecording}
-            disabled={isRecording || isLoading}
+            disabled={isRecording || isLoading || (retryAfterSec ?? 0) > 0}
             className={`w-11 h-11 border-2 border-[#2D2D2D] rounded-xl flex items-center justify-center flex-shrink-0 self-end ${
               isTapRecording
                 ? "bg-[#ffe082] recording-pulse"
@@ -497,7 +588,7 @@ export default function CopilotChat() {
           {/* Send button */}
           <button
             onClick={sendMessage}
-            disabled={!input.trim() || isLoading}
+            disabled={!input.trim() || isLoading || (retryAfterSec ?? 0) > 0}
             className="w-11 h-11 bg-[#2D2D2D] text-white border-2 border-[#2D2D2D] rounded-xl flex items-center justify-center flex-shrink-0 self-end hard-shadow-sm interactive-push disabled:opacity-30 disabled:cursor-not-allowed"
           >
             <Send size={16} strokeWidth={2.5} />

@@ -11,6 +11,7 @@ import {
   type SessionState,
 } from "@/lib/sessionState";
 import { validateBeforeExecution } from "@/lib/musicValidator";
+import type { ChatApiError, ChatApiResponse, ChatErrorCode } from "@/types";
 
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
@@ -40,6 +41,19 @@ interface RhythmContext {
   note_starts_beats: number[];
   note_durations_beats: number[];
   output_mode: "new_track";
+}
+
+interface ProviderErrorPayload {
+  error?: {
+    code?: number;
+    message?: string;
+    status?: string;
+    details?: Array<Record<string, unknown>>;
+  };
+  message?: string;
+  status?: string;
+  code?: number;
+  details?: Array<Record<string, unknown>>;
 }
 
 type ToolDispatch = {
@@ -82,6 +96,252 @@ Preferred creation sequence:
 
 Use \
 \`load_midi_notes\` when a midi_id is available.`;
+
+function parseRetryDelaySeconds(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const match = value.match(/(\d+(?:\.\d+)?)s/i);
+  if (!match) return undefined;
+  return Math.max(1, Math.ceil(Number(match[1])));
+}
+
+function tryParseJsonBlob(input: string): unknown {
+  try {
+    return JSON.parse(input);
+  } catch {
+    const start = input.indexOf("{");
+    const end = input.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(input.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function extractProviderPayload(error: unknown): ProviderErrorPayload | null {
+  if (typeof error === "object" && error !== null) {
+    const payload = error as Record<string, unknown>;
+    if ("error" in payload || "status" in payload || "message" in payload) {
+      return payload as ProviderErrorPayload;
+    }
+  }
+
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const parsed = tryParseJsonBlob(rawMessage);
+
+  if (parsed && typeof parsed === "object") {
+    const firstPass = parsed as Record<string, unknown>;
+    if (typeof firstPass.message === "string") {
+      const nested = tryParseJsonBlob(firstPass.message);
+      if (nested && typeof nested === "object") {
+        return nested as ProviderErrorPayload;
+      }
+    }
+    return firstPass as ProviderErrorPayload;
+  }
+
+  return null;
+}
+
+function extractRetryAfterSec(payload: ProviderErrorPayload | null, rawMessage: string): number | undefined {
+  const details = payload?.error?.details ?? payload?.details;
+  if (Array.isArray(details)) {
+    for (const detail of details) {
+      if (detail["@type"] === "type.googleapis.com/google.rpc.RetryInfo") {
+        const retryDelay = detail.retryDelay;
+        if (typeof retryDelay === "string") {
+          return parseRetryDelaySeconds(retryDelay);
+        }
+      }
+    }
+  }
+
+  const match = rawMessage.match(/retry in (\d+(?:\.\d+)?)s/i)
+    ?? rawMessage.match(/retry in (\d+(?:\.\d+)?) seconds?/i);
+  if (!match) return undefined;
+  return Math.max(1, Math.ceil(Number(match[1])));
+}
+
+function buildChatApiError(error: unknown, preferredProvider: ChatApiError["provider"]): ChatApiError {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const payload = extractProviderPayload(error);
+  const providerStatus = payload?.error?.status ?? payload?.status;
+  const providerCode = payload?.error?.code ?? payload?.code;
+  const providerMessage = payload?.error?.message ?? payload?.message ?? rawMessage;
+  const retryAfterSec = extractRetryAfterSec(payload, providerMessage);
+
+  const statusMap: Record<string, { code: ChatErrorCode; title: string; message: string; canRetry?: boolean }> = {
+    RESOURCE_EXHAUSTED: {
+      code: "rate_limited",
+      title: "Wonder is rate limited",
+      message: retryAfterSec
+        ? `The model hit a quota limit. Try again in ${retryAfterSec} seconds.`
+        : "The model hit a quota limit. Please try again shortly.",
+      canRetry: true,
+    },
+    INVALID_ARGUMENT: {
+      code: "invalid_request",
+      title: "Request needs adjustment",
+      message: "The model rejected this request. Try a shorter, simpler, or more specific prompt.",
+    },
+    FAILED_PRECONDITION: {
+      code: "failed_precondition",
+      title: "Provider setup required",
+      message: "This model or feature is not currently available for the project configuration.",
+    },
+    UNAUTHENTICATED: {
+      code: "authentication",
+      title: "Provider authentication failed",
+      message: "The AI provider credentials are missing or invalid.",
+    },
+    PERMISSION_DENIED: {
+      code: "permission",
+      title: "Provider access denied",
+      message: "The AI provider denied access to this model or resource.",
+    },
+    NOT_FOUND: {
+      code: "not_found",
+      title: "Provider resource not found",
+      message: "The requested model or provider resource could not be found.",
+    },
+    ALREADY_EXISTS: {
+      code: "conflict",
+      title: "Provider conflict",
+      message: "The provider reported a conflicting request state.",
+    },
+    ABORTED: {
+      code: "cancelled",
+      title: "Request was aborted",
+      message: "The provider aborted the request before it completed.",
+      canRetry: true,
+    },
+    CANCELLED: {
+      code: "cancelled",
+      title: "Request was cancelled",
+      message: "The request was cancelled before the provider finished.",
+      canRetry: true,
+    },
+    DEADLINE_EXCEEDED: {
+      code: "timeout",
+      title: "Request timed out",
+      message: "The provider took too long to respond. Try again.",
+      canRetry: true,
+    },
+    UNAVAILABLE: {
+      code: "unavailable",
+      title: "Provider temporarily unavailable",
+      message: "The model provider is temporarily unavailable. Try again shortly.",
+      canRetry: true,
+    },
+    INTERNAL: {
+      code: "provider_internal",
+      title: "Provider internal error",
+      message: "The model provider returned an internal error. Try again.",
+      canRetry: true,
+    },
+    UNKNOWN: {
+      code: "unknown",
+      title: "Unknown provider error",
+      message: "The model provider returned an unknown error.",
+      canRetry: true,
+    },
+  };
+
+  if (providerStatus && statusMap[providerStatus]) {
+    return {
+      ...statusMap[providerStatus],
+      provider: preferredProvider,
+      status: typeof providerCode === "number" ? providerCode : undefined,
+      retryAfterSec,
+      rawMessage: providerMessage,
+    };
+  }
+
+  if (providerCode === 429) {
+    return {
+      code: "rate_limited",
+      title: "Wonder is rate limited",
+      message: retryAfterSec
+        ? `The model hit a quota limit. Try again in ${retryAfterSec} seconds.`
+        : "The model hit a quota limit. Please try again shortly.",
+      provider: preferredProvider,
+      status: 429,
+      retryAfterSec,
+      canRetry: true,
+      rawMessage: providerMessage,
+    };
+  }
+
+  if (providerCode === 400) {
+    return {
+      code: "invalid_request",
+      title: "Request needs adjustment",
+      message: "The request was rejected by the model provider.",
+      provider: preferredProvider,
+      status: 400,
+      rawMessage: providerMessage,
+    };
+  }
+
+  if (providerCode === 401) {
+    return {
+      code: "authentication",
+      title: "Provider authentication failed",
+      message: "The AI provider credentials are missing or invalid.",
+      provider: preferredProvider,
+      status: 401,
+      rawMessage: providerMessage,
+    };
+  }
+
+  if (providerCode === 403) {
+    return {
+      code: "permission",
+      title: "Provider access denied",
+      message: "The AI provider denied access to this model or feature.",
+      provider: preferredProvider,
+      status: 403,
+      rawMessage: providerMessage,
+    };
+  }
+
+  if (providerCode === 404) {
+    return {
+      code: "not_found",
+      title: "Provider resource not found",
+      message: "The requested model or resource could not be found.",
+      provider: preferredProvider,
+      status: 404,
+      rawMessage: providerMessage,
+    };
+  }
+
+  if (providerCode === 502 || providerCode === 503) {
+    return {
+      code: "unavailable",
+      title: "Provider temporarily unavailable",
+      message: "The model provider is temporarily unavailable. Try again shortly.",
+      provider: preferredProvider,
+      status: providerCode,
+      canRetry: true,
+      rawMessage: providerMessage,
+    };
+  }
+
+  return {
+    code: "unknown",
+    title: "Wonder hit an unexpected error",
+    message: "The model provider returned an unexpected error. Try again.",
+    provider: preferredProvider,
+    status: typeof providerCode === "number" ? providerCode : undefined,
+    canRetry: true,
+    retryAfterSec,
+    rawMessage: providerMessage,
+  };
+}
 
 async function callPythonApi(endpoint: string, args: Record<string, unknown>): Promise<unknown> {
   const res = await fetch(`${BACKEND_URL}${endpoint}`, {
@@ -472,10 +732,18 @@ export async function POST(req: NextRequest) {
   const geminiKey = process.env.GEMINI_API_KEY;
 
   if (!anthropicKey && !geminiKey) {
-    return NextResponse.json(
-      { content: "No AI API key set — add ANTHROPIC_API_KEY or GEMINI_API_KEY to .env" },
-      { status: 500 }
-    );
+    const response: ChatApiResponse = {
+      ok: false,
+      error: {
+        code: "failed_precondition",
+        title: "Provider setup required",
+        message: "No AI API key is configured. Add ANTHROPIC_API_KEY or GEMINI_API_KEY.",
+        provider: "backend",
+        status: 500,
+        canRetry: false,
+      },
+    };
+    return NextResponse.json(response, { status: 500 });
   }
 
   try {
@@ -533,11 +801,14 @@ export async function POST(req: NextRequest) {
       }).catch(() => {});
     }
 
-    return NextResponse.json({ content: finalText });
+    return NextResponse.json({ ok: true, content: finalText } satisfies ChatApiResponse);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("Wonder chat error:", message);
-    return NextResponse.json({ content: `Error: ${message}` }, { status: 500 });
+    const provider = anthropicKey ? "anthropic" : "gemini";
+    const error = buildChatApiError(err, provider);
+    console.error("Wonder chat error:", error.rawMessage ?? error.message);
+    return NextResponse.json({ ok: false, error } satisfies ChatApiResponse, {
+      status: error.status ?? 500,
+    });
   }
 }
 

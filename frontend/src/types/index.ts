@@ -38,6 +38,37 @@ export interface ChatResponse {
   suggestions?: string[];
 }
 
+export type ChatErrorCode =
+  | "rate_limited"
+  | "invalid_request"
+  | "authentication"
+  | "permission"
+  | "not_found"
+  | "failed_precondition"
+  | "conflict"
+  | "cancelled"
+  | "timeout"
+  | "unavailable"
+  | "provider_internal"
+  | "network"
+  | "backend"
+  | "unknown";
+
+export interface ChatApiError {
+  code: ChatErrorCode;
+  title: string;
+  message: string;
+  provider: "gemini" | "google-adk" | "anthropic" | "backend" | "unknown";
+  status?: number;
+  retryAfterSec?: number;
+  canRetry?: boolean;
+  rawMessage?: string;
+}
+
+export type ChatApiResponse =
+  | { ok: true; content: string }
+  | { ok: false; error: ChatApiError };
+
 export interface Chat {
   id: string;
   title: string;
