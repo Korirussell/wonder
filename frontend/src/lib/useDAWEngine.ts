@@ -121,14 +121,18 @@ export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineR
               });
             }
 
-            // Sync durationMeasures on all non-sliced blocks for this track to the
-            // actual buffer duration so visual width matches real audio length.
+            // Sync durationMeasures on all non-sliced, non-pinned blocks for this track
+            // to the actual buffer duration so visual width matches real audio length.
             if (track.loop) return;
             const bpm = stateRef.current.transport.bpm;
             const spm = (4 * 60) / bpm;
             const accurateDurationMeasures = durationSec / spm;
             stateRef.current.blocks
-              .filter((b) => b.trackId === track.id && !b.bufferOffsetSec)
+              .filter((b) =>
+                b.trackId === track.id &&
+                b.bufferOffsetSec === undefined &&   // skip razor-split segments (offset 0 is falsy but valid)
+                !b.pinned                            // skip manually resized or split blocks
+              )
               .forEach((b) => {
                 if (Math.abs(b.durationMeasures - accurateDurationMeasures) > 0.01) {
                   dispatch({

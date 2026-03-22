@@ -417,7 +417,7 @@ export function DAWTimeline({
           const newDur = free
             ? Math.max(0.01, raw)
             : Math.max(snapStepMeasures, Math.round(raw / snapStepMeasures) * snapStepMeasures);
-          onUpdateBlock(drag.blockId, { durationMeasures: newDur });
+          onUpdateBlock(drag.blockId, { durationMeasures: newDur, pinned: true });
         }
       }
       blockDragRef.current = null;
@@ -498,6 +498,7 @@ export function DAWTimeline({
         id: crypto.randomUUID(),
         durationMeasures: splitMeasures,
         bufferOffsetSec: existingOffset,
+        pinned: true,
       };
 
       const blockB: DAWBlock = {
@@ -506,6 +507,7 @@ export function DAWTimeline({
         startMeasure: block.startMeasure + splitMeasures,
         durationMeasures: block.durationMeasures - splitMeasures,
         bufferOffsetSec: existingOffset + splitMeasures * spm,
+        pinned: true,
       };
 
       onDeleteBlock(block.id);

@@ -37,6 +37,26 @@ lo-fi: kick 1+7, snare 5+13, hi-hats every other step
 - Be specific: "deep punchy 808 sub bass hit with long tail decay" not just "bass"
 - Drums: 0.5-1.5s. Pads/melodies: 2-4s
 
+## FX Tool Guide
+- After placing audio, call setTrackFX to shape the sound to the vibe.
+- Or call applyVibeFX with a vibe string to auto-apply FX presets to ALL tracks at once.
+- Use applyVibeFX when user says things like "make it sound more lo-fi", "add some warmth", "make it dreamy", "bedroom pop vibes", "make it gritty", etc.
+- applyVibeFX vibes: "lo-fi" | "dreamy" | "dark" | "bright" | "warm" | "gritty" | "808" | "clean" | "bedroom-pop" | "drill" | "jazz"
+- setTrackFX lets you target one track with exact reverb/distortion/EQ values.
+
+## FX Preset Reference
+lo-fi: reverb 0.25, drive 0.15, low +3, mid -2, high -4
+dreamy: reverb 0.65, drive 0, low 0, mid -1, high +2
+dark: reverb 0.3, drive 0.2, low +4, mid -3, high -5
+bright: reverb 0.1, drive 0, low -2, mid +1, high +4
+warm: reverb 0.2, drive 0.1, low +3, mid +1, high -3
+gritty: reverb 0.1, drive 0.55, low +2, mid 0, high -2
+808: reverb 0.15, drive 0.35, low +5, mid -2, high -3
+bedroom-pop: reverb 0.4, drive 0.05, low +1, mid +2, high +1
+drill: reverb 0.05, drive 0.3, low +4, mid -1, high -2
+jazz: reverb 0.35, drive 0, low +2, mid +3, high +1
+clean: reverb 0, drive 0, low 0, mid 0, high 0
+
 ${getProfilePromptBlock()}
 `;
 
@@ -125,6 +145,27 @@ export async function POST(req: NextRequest) {
           startMeasure: z.number().int().min(1).default(1).describe("Where to place the clip on the arrangement timeline"),
           isLoop:       z.boolean().default(true).describe("Whether to loop the clip (default true)"),
           color:        z.string().optional(),
+        })),
+      }),
+
+      setTrackFX: tool({
+        description: "Apply reverb, distortion (drive), and 3-band EQ to a specific track by ID. Call after generating a track to shape the sound.",
+        inputSchema: zodSchema(z.object({
+          trackId:    z.string().describe("The DAW track ID to apply FX to"),
+          reverb:     z.number().min(0).max(1).optional().describe("Reverb wet mix 0-1"),
+          drive:      z.number().min(0).max(1).optional().describe("Distortion drive amount 0-1"),
+          eqLow:      z.number().min(-12).max(12).optional().describe("Low shelf gain in dB"),
+          eqMid:      z.number().min(-12).max(12).optional().describe("Mid gain in dB"),
+          eqHigh:     z.number().min(-12).max(12).optional().describe("High shelf gain in dB"),
+          cabEnabled: z.boolean().optional().describe("Enable cabinet sim (speaker roll-off) — good for guitars/saturation"),
+        })),
+      }),
+
+      applyVibeFX: tool({
+        description: "Auto-apply FX presets to ALL tracks based on a vibe/mood/genre. Use when user asks for a sonic feel like 'make it lo-fi', 'add reverb everywhere', 'bedroom pop vibes', etc.",
+        inputSchema: zodSchema(z.object({
+          vibe: z.enum(["lo-fi", "dreamy", "dark", "bright", "warm", "gritty", "808", "clean", "bedroom-pop", "drill", "jazz"]).describe("The vibe preset to apply"),
+          trackIds: z.array(z.string()).optional().describe("Specific track IDs to apply to. If omitted, applies to all tracks."),
         })),
       }),
 

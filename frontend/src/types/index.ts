@@ -120,6 +120,7 @@ export interface DAWBlock {
   durationMeasures: number;
   color?: string;
   bufferOffsetSec?: number; // NDE: seconds into audio buffer where this clip starts (set by razor splits)
+  pinned?: boolean;          // true after manual resize or razor split — prevents auto-duration sync
 }
 
 export interface DAWTransport {

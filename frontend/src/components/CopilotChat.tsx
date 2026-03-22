@@ -492,6 +492,50 @@ export default function CopilotChat() {
           }
           break;
         }
+
+        case "setTrackFX": {
+          const trackId = args.trackId as string;
+          if (args.reverb     !== undefined) toneEngine.setStemReverb(trackId, args.reverb as number);
+          if (args.drive      !== undefined) { toneEngine.setStemAmpEnabled(trackId, (args.drive as number) > 0); toneEngine.setStemAmpDrive(trackId, args.drive as number); }
+          if (args.eqLow !== undefined || args.eqMid !== undefined || args.eqHigh !== undefined) {
+            toneEngine.setStemEQ(trackId, (args.eqLow as number) ?? 0, (args.eqMid as number) ?? 0, (args.eqHigh as number) ?? 0);
+          }
+          if (args.cabEnabled !== undefined) toneEngine.setStemAmpCabinet(trackId, args.cabEnabled as boolean);
+          result = `FX applied to track ${trackId}`;
+          break;
+        }
+
+        case "applyVibeFX": {
+          const VIBE_PRESETS: Record<string, { reverb: number; drive: number; low: number; mid: number; high: number }> = {
+            "lo-fi":        { reverb: 0.25, drive: 0.15, low:  3, mid: -2, high: -4 },
+            "dreamy":       { reverb: 0.65, drive: 0,    low:  0, mid: -1, high:  2 },
+            "dark":         { reverb: 0.30, drive: 0.20, low:  4, mid: -3, high: -5 },
+            "bright":       { reverb: 0.10, drive: 0,    low: -2, mid:  1, high:  4 },
+            "warm":         { reverb: 0.20, drive: 0.10, low:  3, mid:  1, high: -3 },
+            "gritty":       { reverb: 0.10, drive: 0.55, low:  2, mid:  0, high: -2 },
+            "808":          { reverb: 0.15, drive: 0.35, low:  5, mid: -2, high: -3 },
+            "bedroom-pop":  { reverb: 0.40, drive: 0.05, low:  1, mid:  2, high:  1 },
+            "drill":        { reverb: 0.05, drive: 0.30, low:  4, mid: -1, high: -2 },
+            "jazz":         { reverb: 0.35, drive: 0,    low:  2, mid:  3, high:  1 },
+            "clean":        { reverb: 0,    drive: 0,    low:  0, mid:  0, high:  0 },
+          };
+          const preset = VIBE_PRESETS[args.vibe as string];
+          if (!preset) { result = `Unknown vibe: ${args.vibe as string}`; break; }
+
+          const targetIds = (args.trackIds as string[] | undefined)?.length
+            ? (args.trackIds as string[])
+            : dawStateRef.current.tracks.map(t => t.id);
+
+          targetIds.forEach(id => {
+            toneEngine.setStemReverb(id, preset.reverb);
+            toneEngine.setStemAmpEnabled(id, preset.drive > 0);
+            toneEngine.setStemAmpDrive(id, preset.drive);
+            toneEngine.setStemEQ(id, preset.low, preset.mid, preset.high);
+          });
+
+          result = `"${args.vibe as string}" FX applied to ${targetIds.length} track(s)`;
+          break;
+        }
       }
 
       // Report tool result back to the chat
@@ -1156,7 +1200,7 @@ export default function CopilotChat() {
   useEffect(() => {
     const wasStreaming = prevStatusRef.current === "streaming" || prevStatusRef.current === "submitted";
     prevStatusRef.current = status;
-    if (!wasStreaming || status !== "idle") return;
+    if (!wasStreaming || status !== "ready") return;
 
     setMessages(prev => {
       const last = prev[prev.length - 1];

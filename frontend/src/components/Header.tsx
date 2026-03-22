@@ -236,7 +236,7 @@ function DropdownMenu({ items }: { items: MenuItem[] }) {
 
 // ─── Header ───────────────────────────────────────────────────────────────────
 
-type OpenMenu = "file" | "agent" | null;
+type OpenMenu = "file" | "agent" | "sessions" | null;
 
 export default function Header() {
   const [openMenu, setOpenMenu]       = useState<OpenMenu>(null);
@@ -247,6 +247,8 @@ export default function Header() {
   const [toast, setToast]               = useState<string | null>(null);
   const [v2Tooltip, setV2Tooltip]       = useState<"mastering" | "stems" | null>(null);
   const [savedSessions, setSavedSessions] = useState<SavedSessionMeta[]>([]);
+  const [sessionRenameId, setSessionRenameId] = useState<string | null>(null);
+  const [sessionRenameValue, setSessionRenameValue] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
 
   const { state, dispatch } = useDAWContext();
@@ -568,28 +570,7 @@ export default function Header() {
                 Playful Studio
               </span>
             </div>
-          ) : (
-            <button
-              onClick={() => {
-                setOpenMenu(null);
-                const root = document.documentElement;
-                root.classList.remove("wonder-kids-quake");
-                void root.offsetWidth;
-                root.classList.add("wonder-kids-quake");
-                window.setTimeout(() => root.classList.remove("wonder-kids-quake"), 720);
-                dispatch({ type: "SET_KIDS_MODE", payload: true });
-              }}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-sm border border-[#FACC15] bg-[#FFF7CC] hover:bg-[#FFF0A0] transition-colors"
-              title="Switch to Wonder Kids mode"
-            >
-              {(["K","I","D","S"] as const).map((l, i) => (
-                <span key={l} className="font-black text-[13px] leading-none"
-                  style={{ color: ["#60A5FA","#FACC15","#F43F5E","#FB923C"][i], fontFamily: "'Hiragino Maru Gothic ProN', 'Arial Rounded MT Bold', ui-rounded, system-ui, sans-serif", textShadow: "1px 1px 0 rgba(26,26,26,0.10)" }}>
-                  {l}
-                </span>
-              ))}
-            </button>
-          )}
+          ) : null}
         </div>
 
         <div className="flex-1" />
@@ -611,6 +592,97 @@ export default function Header() {
             <span className="text-[13px] font-bold font-mono text-[#1a1a1a] leading-none">4 / 4</span>
           </div>
         </div>
+
+        {/* Sessions quick-access */}
+        {!kidsMode && (
+          <div className="relative">
+            <button
+              onClick={() => setOpenMenu(openMenu === "sessions" ? null : "sessions")}
+              className={`flex items-center gap-1.5 h-[32px] px-2.5 rounded-sm border-2 border-[#1A1A1A] text-[10px] font-bold uppercase tracking-[0.14em] transition-colors shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] ${
+                openMenu === "sessions"
+                  ? "bg-[#1A1A1A] text-white"
+                  : "bg-[#FDFDFB] text-[#1A1A1A] hover:bg-[#F0F0EB]"
+              }`}
+              title="Sessions"
+            >
+              <span>Sessions</span>
+              {savedSessions.length > 0 && (
+                <span className={`text-[9px] font-black px-1 py-0.5 rounded-sm ${
+                  openMenu === "sessions" ? "bg-white/20 text-white" : "bg-[#1A1A1A] text-white"
+                }`}>{savedSessions.length}</span>
+              )}
+            </button>
+
+            {openMenu === "sessions" && (
+              <div className="absolute right-0 top-[calc(100%+4px)] z-50 w-72 bg-[#FDFDFB] border-2 border-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] rounded-sm">
+                {/* Save row */}
+                <div className="flex items-center gap-2 p-2 border-b-2 border-[#1A1A1A]">
+                  <button
+                    onClick={() => { void handleSaveSession(); setOpenMenu(null); }}
+                    className="flex-1 py-1.5 px-3 bg-[#1A1A1A] text-white text-[10px] font-bold uppercase tracking-[0.12em] hover:bg-[#333] transition-colors rounded-sm"
+                  >
+                    + Save Current Session
+                  </button>
+                </div>
+
+                {/* Session list */}
+                {savedSessions.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-[11px] text-[#999] font-mono">
+                    No saved sessions yet
+                  </div>
+                ) : (
+                  <ul className="max-h-64 overflow-y-auto">
+                    {savedSessions.map((sess, i) => (
+                      <li key={sess.id} className={`flex items-center gap-1 px-2 py-1.5 hover:bg-[#F0F0EB] transition-colors ${
+                        i < savedSessions.length - 1 ? "border-b border-[#E8E8E2]" : ""
+                      }`}>
+                        {sessionRenameId === sess.id ? (
+                          <input
+                            autoFocus
+                            value={sessionRenameValue}
+                            onChange={e => setSessionRenameValue(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") {
+                                const trimmed = sessionRenameValue.trim();
+                                if (trimmed) {
+                                  const all = JSON.parse(localStorage.getItem("wonder_saved_sessions_v1") ?? "[]") as Array<{id: string; name: string}>;
+                                  const updated = all.map(s => s.id === sess.id ? { ...s, name: trimmed } : s);
+                                  localStorage.setItem("wonder_saved_sessions_v1", JSON.stringify(updated));
+                                  window.dispatchEvent(new CustomEvent("wonder-sessions-changed"));
+                                }
+                                setSessionRenameId(null);
+                              }
+                              if (e.key === "Escape") setSessionRenameId(null);
+                            }}
+                            onBlur={() => setSessionRenameId(null)}
+                            className="flex-1 text-[11px] font-mono bg-white border border-[#1A1A1A] px-1.5 py-0.5 rounded-sm outline-none"
+                          />
+                        ) : (
+                          <button
+                            className="flex-1 text-left"
+                            onClick={() => { void handleLoadSession(sess.id); setOpenMenu(null); }}
+                          >
+                            <div className="text-[11px] font-bold text-[#1A1A1A] truncate">{sess.name}</div>
+                            <div className="text-[9px] font-mono text-[#999]">{new Date(sess.savedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
+                          </button>
+                        )}
+                        <button
+                          onClick={e => { e.stopPropagation(); setSessionRenameId(sess.id); setSessionRenameValue(sess.name); }}
+                          className="p-1 text-[#999] hover:text-[#1A1A1A] transition-colors text-[10px]"
+                          title="Rename"
+                        >✎</button>
+                        <button
+                          onClick={e => { e.stopPropagation(); void handleLoadSession(sess.id); setOpenMenu(null); }}
+                          className="text-[9px] font-bold uppercase tracking-wide px-2 py-1 bg-[#1A1A1A] text-white hover:bg-[#333] transition-colors rounded-sm"
+                        >Load</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {kidsMode ? null : (
           <button
