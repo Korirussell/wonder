@@ -34,9 +34,9 @@ source = { editable = "agent" }
 dependencies = [
     { name = "fastapi" },
     { name = "google-adk" },
-    { name = "httpx" },
     { name = "motor" },
     { name = "python-multipart" },
+    { name = "server" },
     { name = "snowflake-connector-python" },
     { name = "soundgen" },
     { name = "soundsplit" },
@@ -47,9 +47,9 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "google-adk", specifier = ">=1.27.2" },
-    { name = "httpx", specifier = ">=0.27" },
     { name = "motor", specifier = ">=3.3" },
     { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "server", editable = "server" },
     { name = "snowflake-connector-python", specifier = ">=3.0" },
     { name = "soundgen", editable = "soundgen" },
     { name = "soundsplit", editable = "soundsplit" },

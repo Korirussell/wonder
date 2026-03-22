@@ -49,6 +49,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount the audio-processing REST server at /audio so external tools
+# (frontend /api/transcribe, etc.) can still reach it without a separate process.
+try:
+    from server.rest import app as _audio_app
+    app.mount("/audio", _audio_app)
+except ImportError:
+    pass
+
 
 # ── Request / response models ────────────────────────────────────────────────
 

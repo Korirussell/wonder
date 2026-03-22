@@ -1,15 +1,12 @@
 """
 Audio transcription and MIDI retrieval tools for Wonder ADK agent.
 
-Both tools call the Python REST server at PYTHON_API_URL (default localhost:8000).
+Calls server handlers directly (same process) — no HTTP round-trip.
 """
 from __future__ import annotations
 
-import os
-
-import httpx
-
-PYTHON_API_URL = os.getenv("PYTHON_API_URL", "http://localhost:8000")
+import asyncio
+from typing import Any
 
 
 async def transcribe_audio(
@@ -17,7 +14,7 @@ async def transcribe_audio(
     input_format: str = "webm",
     tempo_bpm: float = 120.0,
     pitch_correction_strength: float = 0.7,
-) -> dict:
+) -> dict[str, Any]:
     """
     Convert base64-encoded audio (WebM or WAV) to MIDI notes using Spotify basic-pitch.
 
@@ -33,25 +30,25 @@ async def transcribe_audio(
         pitch_correction_strength: 0–1 float; higher = more pitch correction.
     """
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{PYTHON_API_URL}/transcribe",
-                json={
-                    "audio_data": audio_data,
-                    "input_format": input_format,
-                    "tempo_bpm": tempo_bpm,
-                    "pitch_correction_strength": pitch_correction_strength,
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()
-    except httpx.HTTPStatusError as exc:
-        return {"error": f"HTTP {exc.response.status_code}: {exc.response.text}", "success": False}
+        from server.utils.audio_to_midi import transcribe_audio_base64
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: transcribe_audio_base64(
+                audio_data,
+                input_format,
+                tempo_bpm,
+                0.5,   # onset_threshold default
+                0.3,   # frame_threshold default
+                pitch_correction_strength,
+            ),
+        )
     except Exception as exc:
         return {"error": str(exc), "success": False}
 
 
-async def load_midi_notes(midi_id: str) -> dict:
+async def load_midi_notes(midi_id: str) -> dict[str, Any]:
     """
     Retrieve MIDI notes for a previously transcribed audio file by its midi_id.
 
@@ -63,11 +60,33 @@ async def load_midi_notes(midi_id: str) -> dict:
         midi_id: The ID returned by a prior transcribe_audio call.
     """
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{PYTHON_API_URL}/midi/{midi_id}")
-            resp.raise_for_status()
-            return resp.json()
-    except httpx.HTTPStatusError as exc:
-        return {"error": f"HTTP {exc.response.status_code}: {exc.response.text}", "success": False}
+        import pretty_midi
+        from server.utils.audio_to_midi import get_midi_file_path
+
+        midi_path = get_midi_file_path(midi_id)
+        if not midi_path:
+            return {"error": f"MIDI not found: {midi_id}", "success": False}
+
+        loop = asyncio.get_running_loop()
+
+        def _parse() -> dict[str, Any]:
+            pm = pretty_midi.PrettyMIDI(midi_path)
+            _, tempos = pm.get_tempo_change_times()
+            bpm = float(tempos[0]) if len(tempos) > 0 else 120.0
+            bps = bpm / 60.0
+            notes = [
+                {
+                    "pitch": n.pitch,
+                    "start_time": round(n.start * bps, 4),
+                    "duration": round((n.end - n.start) * bps, 4),
+                    "velocity": n.velocity,
+                    "mute": False,
+                }
+                for inst in pm.instruments
+                for n in inst.notes
+            ]
+            return {"success": True, "midi_id": midi_id, "notes": notes, "note_count": len(notes), "tempo_bpm": bpm}
+
+        return await loop.run_in_executor(None, _parse)
     except Exception as exc:
         return {"error": str(exc), "success": False}
