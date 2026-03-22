@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt: body.prompt,
-        duration_seconds: body.duration_seconds ?? 2.0,
+        duration_seconds: body.duration_seconds ?? 22.0,
       }),
     });
 

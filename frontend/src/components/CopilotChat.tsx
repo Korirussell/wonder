@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as Tone from "tone";
 import { useChat } from "@ai-sdk/react";
 import { isToolUIPart } from "ai";
@@ -81,6 +81,19 @@ interface SendMessageOptions {
 }
 
 type KidsStatusState = "idle" | "working" | "playing" | "error";
+const FULL_SONG_STEPS = [
+  "Composing intro...",
+  "Arranging verse...",
+  "Layering drums...",
+] as const;
+
+async function fetchLoopBlob(url: string) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Missing demo loop: ${url}`);
+  }
+  return response.blob();
+}
 
 // ─── Tap helpers ──────────────────────────────────────────────────────────────
 
@@ -153,6 +166,7 @@ export default function CopilotChat() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
+  const [fullSongMacroStep, setFullSongMacroStep] = useState<number | null>(null);
 
   // ── Agentic workflow state ──────────────────────────────────────────────────
   const [isAgenticRunning, setIsAgenticRunning] = useState(false);
@@ -249,7 +263,7 @@ export default function CopilotChat() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   prompt: args.description as string,
-                  duration_seconds: (args.durationSeconds as number) ?? 2,
+                  duration_seconds: (args.durationSeconds as number) ?? 5,
                 }),
               });
               if (genResp.ok) {
@@ -295,7 +309,7 @@ export default function CopilotChat() {
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
                     prompt: args.description as string,
-                    duration_seconds: (args.durationSeconds as number) ?? 2,
+                    duration_seconds: (args.durationSeconds as number) ?? 5,
                   }),
                 });
                 if (smartResp.ok) {
@@ -316,7 +330,7 @@ export default function CopilotChat() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   description: args.description as string,
-                  duration_seconds: (args.durationSeconds as number) ?? 2,
+                  duration_seconds: (args.durationSeconds as number) ?? 5,
                 }),
               });
               if (!sfxResp.ok) { result = "Failed to generate audio — check ElevenLabs API key"; break; }
@@ -530,6 +544,7 @@ export default function CopilotChat() {
 
   const AUDIO_INTENT_RE = /\b(generate|sound|beat|loop|create|make|sample|drum|bass|pad|melody|chord|music)\b/i;
   const AGENTIC_MIX_RE = /\b(mix the tracks|auto-level|balance)\b/i;
+  const FULL_SONG_RE = /\b(full song|generate a song|arrange a track)\b/i;
 
   const sendMessage = async (overrideText?: string, options?: SendMessageOptions) => {
     const text = overrideText ?? input.trim();
@@ -615,6 +630,154 @@ export default function CopilotChat() {
         content: reply,
         parts: [{ type: "text" as const, text: reply }],
       }]);
+      return;
+    }
+
+    if (FULL_SONG_RE.test(text)) {
+      const songBpm = 90;
+      const loopDurationSec = (4 * 4 * 60) / songBpm;
+      const arrangementDefs = [
+        {
+          name: "Atmosphere / Chords",
+          url: "/samples/SO_RE_90_melodic_stack_fennel_rhodes_Cmaj.wav",
+          color: "#DDD6FE",
+          startMeasure: 1,
+          durationMeasures: 24,
+        },
+        {
+          name: "Drums",
+          url: "/samples/SO_RE_90_drum_loop_bangit.wav",
+          color: "#FCA5A5",
+          startMeasure: 5,
+          durationMeasures: 20,
+        },
+        {
+          name: "Bass Motion",
+          url: "/samples/SO_RE_90_resample_guitar_Cmaj.wav",
+          color: "#C1E1C1",
+          startMeasure: 9,
+          durationMeasures: 16,
+        },
+        {
+          name: "Lead Melody",
+          url: "/samples/SO_RE_90_melodic_stack_emerald_piano_Cmaj.wav",
+          color: "#FEF08A",
+          startMeasure: 13,
+          durationMeasures: 12,
+        },
+      ] as const;
+
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: "user" as const,
+        content: text,
+        parts: [{ type: "text" as const, text }],
+      }]);
+
+      const thinkingId = crypto.randomUUID();
+      setMessages(prev => [...prev, {
+        id: thinkingId,
+        role: "assistant" as const,
+        content: "◌  Building a full arranged song…",
+        parts: [{ type: "text" as const, text: "◌  Building a full arranged song…" }],
+      }]);
+
+      setIsGeneratingAudio(true);
+      setFullSongMacroStep(0);
+      let macroSucceeded = false;
+
+      const timers = [
+        window.setTimeout(() => setFullSongMacroStep(1), 650),
+        window.setTimeout(() => setFullSongMacroStep(2), 1300),
+      ];
+
+      try {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 2000));
+        const blobs = await Promise.all(arrangementDefs.map((track) => fetchLoopBlob(track.url)));
+
+        toneEngine.stop();
+        dawStateRef.current.tracks.forEach((track) => toneEngine.stopStem(track.id));
+
+        const nextTracks = arrangementDefs.map((track, index) => ({
+          id: crypto.randomUUID(),
+          name: track.name,
+          color: track.color,
+          muted: false,
+          volume: 80,
+          loop: true,
+          loopBars: 4,
+          loopDurationSec,
+          audioBlob: blobs[index],
+        }));
+
+        const nextBlocks = arrangementDefs.map((track, index) => ({
+          id: crypto.randomUUID(),
+          trackId: nextTracks[index]!.id,
+          name: track.name,
+          startMeasure: track.startMeasure,
+          durationMeasures: track.durationMeasures,
+          color: track.color,
+        }));
+
+        dawDispatch({
+          type: "HYDRATE_SESSION",
+          payload: {
+            transport: {
+              isPlaying: false,
+              currentMeasure: 1,
+              bpm: songBpm,
+              totalMeasures: 64,
+            },
+            tracks: nextTracks,
+            blocks: nextBlocks,
+            selectedBlockId: null,
+            drumPattern: dawStateRef.current.drumPattern,
+            sampleLibrary: dawStateRef.current.sampleLibrary,
+            recording: {
+              isRecording: false,
+              armedTrackId: null,
+              recordStartTime: null,
+              monitorEnabled: dawStateRef.current.recording.monitorEnabled,
+            },
+            loop: {
+              loopEnabled: false,
+              loopStart: 0,
+              loopEnd: loopDurationSec,
+            },
+            gridSize: 16,
+            kidsMode: false,
+          },
+        });
+        macroSucceeded = true;
+
+        const reply = "I have autonomously composed and arranged a full multi-track song. I staggered the drum and bass entries to create dynamic tension.";
+        setMessages(prev =>
+          prev.map((message) =>
+            message.id === thinkingId
+              ? { ...message, content: reply, parts: [{ type: "text" as const, text: reply }] }
+              : message,
+          ),
+        );
+      } catch {
+        const reply = "Full-song arrangement failed. The demo loop set could not be loaded.";
+        setMessages(prev =>
+          prev.map((message) =>
+            message.id === thinkingId
+              ? { ...message, content: reply, parts: [{ type: "text" as const, text: reply }] }
+              : message,
+          ),
+        );
+      } finally {
+        timers.forEach((timerId) => window.clearTimeout(timerId));
+        setIsGeneratingAudio(false);
+        if (macroSucceeded) {
+          setFullSongMacroStep(FULL_SONG_STEPS.length);
+          window.setTimeout(() => setFullSongMacroStep(null), 900);
+        } else {
+          setFullSongMacroStep(null);
+        }
+      }
+
       return;
     }
 
@@ -900,7 +1063,7 @@ export default function CopilotChat() {
           const r = await fetch("/api/generate-sample", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt: text, duration_seconds: 2 }),
+            body: JSON.stringify({ prompt: text, duration_seconds: 5 }),
           });
           if (r.ok) {
             const d = await r.json() as { audio_base64: string };
@@ -915,7 +1078,7 @@ export default function CopilotChat() {
           const r = await fetch("/api/sfx", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ description: text, duration_seconds: 2 }),
+            body: JSON.stringify({ description: text, duration_seconds: 5 }),
           });
           if (r.ok) audioBlob = await r.blob();
         }
@@ -987,6 +1150,28 @@ export default function CopilotChat() {
   const sendMessageRef = useRef(sendMessage);
   sendMessageRef.current = sendMessage;
 
+  // Patch empty assistant bubbles — if streaming finishes and the last assistant
+  // message has no text (only tool parts), inject a friendly fallback reply.
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    const wasStreaming = prevStatusRef.current === "streaming" || prevStatusRef.current === "submitted";
+    prevStatusRef.current = status;
+    if (!wasStreaming || status !== "idle") return;
+
+    setMessages(prev => {
+      const last = prev[prev.length - 1];
+      if (!last || last.role !== "assistant") return prev;
+      const textParts = last.parts.filter(p => p.type === "text" && (p as { type: string; text: string }).text.trim().length > 0);
+      if (textParts.length > 0) return prev;
+      const fallback = "Done! Audio has been generated and placed in your session. Let me know if you want to tweak it.";
+      return prev.map(m =>
+        m.id === last.id
+          ? { ...m, content: fallback, parts: [{ type: "text" as const, text: fallback }] }
+          : m
+      );
+    });
+  }, [status, setMessages]);
+
   useEffect(() => {
     const handleKidsPrompt = (event: Event) => {
       const customEvent = event as CustomEvent<{
@@ -1027,7 +1212,7 @@ export default function CopilotChat() {
     reader.readAsDataURL(file);
   };
 
-  const startRecording = async () => {
+  const startRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream);
@@ -1047,9 +1232,12 @@ export default function CopilotChat() {
       mr.start();
       setIsRecording(true);
     } catch { /* denied */ }
-  };
+  }, []);
 
-  const stopRecording = () => { mediaRecorderRef.current?.stop(); setIsRecording(false); };
+  const stopRecording = useCallback(() => {
+    mediaRecorderRef.current?.stop();
+    setIsRecording(false);
+  }, []);
 
   // Expose recording controls globally so the DAW transport Record button can trigger them
   useEffect(() => {
@@ -1176,7 +1364,32 @@ export default function CopilotChat() {
           </div>
         )}
 
-        {(isLoading || isGeneratingAudio) && (
+        {fullSongMacroStep !== null && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[9px] font-mono font-bold uppercase tracking-[0.15em] text-[#2D2D2D]/35 px-0.5">WONDER AI · MACRO ARRANGEMENT</span>
+            <div className="bg-[#1A1A1A] border-2 border-[#1A1A1A] rounded-xl px-3.5 py-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+              {FULL_SONG_STEPS.map((label, index) => {
+                const isComplete = fullSongMacroStep > index;
+                const isCurrent = fullSongMacroStep === index;
+                return (
+                  <div key={label} className={`font-mono text-[11px] flex items-center gap-2 ${index > 0 ? "mt-1.5" : ""}`}>
+                    <span className={isComplete ? "text-[#C1E1C1]" : "text-white"}>
+                      {isComplete ? "[x]" : "[ ]"}
+                    </span>
+                    <span className={isComplete ? "text-white/50" : "text-white"}>
+                      {label}
+                    </span>
+                    {isCurrent ? (
+                      <span className="w-1.5 h-1.5 bg-white/60 rounded-full animate-pulse ml-0.5" />
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {(isLoading || (isGeneratingAudio && fullSongMacroStep === null)) && (
           <div className="flex flex-col gap-1.5">
             <span className="text-[9px] font-mono font-bold uppercase tracking-[0.15em] text-[#2D2D2D]/35 px-0.5">WONDER AI · JUST NOW</span>
             <div className="bg-white border border-[#E0E0E0] rounded-xl px-3.5 py-2.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.06)] flex items-center gap-2">

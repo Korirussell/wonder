@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import * as Tone from "tone";
 import { X, Settings, User, ChevronDown, Cpu, Sparkles, Guitar } from "lucide-react";
 import WonderProfileModal from "./WonderProfileModal";
@@ -8,6 +8,7 @@ import SolanaBlinkModal from "./SolanaBlinkModal";
 import AmpRack from "./AmpRack";
 import { useDAWContext } from "@/lib/DAWContext";
 import { toneEngine } from "@/lib/toneEngine";
+import { listSavedSessions, loadSessionSnapshot, saveSessionSnapshot, type SavedSessionMeta } from "@/lib/sessionSnapshots";
 
 // ─── Audio Engine Settings Modal ─────────────────────────────────────────────
 
@@ -245,6 +246,7 @@ export default function Header() {
   const [ampOpen,   setAmpOpen]         = useState(false);
   const [toast, setToast]               = useState<string | null>(null);
   const [v2Tooltip, setV2Tooltip]       = useState<"mastering" | "stems" | null>(null);
+  const [savedSessions, setSavedSessions] = useState<SavedSessionMeta[]>([]);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const { state, dispatch } = useDAWContext();
@@ -311,7 +313,20 @@ export default function Header() {
     };
   }, []);
 
-  const showToast = (msg: string) => { setToast(null); setTimeout(() => setToast(msg), 10); };
+  const showToast = useCallback((msg: string) => {
+    setToast(null);
+    setTimeout(() => setToast(msg), 10);
+  }, []);
+
+  useEffect(() => {
+    const syncSavedSessions = () => {
+      setSavedSessions(listSavedSessions());
+    };
+
+    syncSavedSessions();
+    window.addEventListener("wonder-sessions-changed", syncSavedSessions);
+    return () => window.removeEventListener("wonder-sessions-changed", syncSavedSessions);
+  }, []);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -332,18 +347,86 @@ export default function Header() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  const triggerExport = (dawName: string) => {
+  const triggerExport = useCallback((dawName: string) => {
     setOpenMenu(null);
     showToast(`Packaging session for ${dawName}…`);
     setTimeout(() => showToast("Export Complete! Check your downloads."), 2000);
-  };
+  }, [showToast]);
+
+  const handleSaveSession = useCallback(async () => {
+    setOpenMenu(null);
+    showToast("Saving session…");
+    try {
+      const saved = await saveSessionSnapshot(state);
+      setSavedSessions(listSavedSessions());
+      showToast(`Saved ${saved.name}`);
+    } catch {
+      showToast("Session save failed.");
+    }
+  }, [showToast, state]);
+
+  const handleLoadSession = useCallback(async (sessionId?: string) => {
+    setOpenMenu(null);
+    showToast("Loading session…");
+
+    toneEngine.stop();
+    state.tracks.forEach((track) => toneEngine.stopStem(track.id));
+
+    try {
+      const restored = await loadSessionSnapshot(sessionId);
+      if (!restored) {
+        showToast("No saved sessions found.");
+        return;
+      }
+
+      dispatch({ type: "HYDRATE_SESSION", payload: restored });
+      showToast(`Loaded ${listSavedSessions().find((entry) => entry.id === (sessionId ?? listSavedSessions()[0]?.id))?.name ?? "saved session"}`);
+    } catch {
+      showToast("Session load failed.");
+    }
+  }, [dispatch, showToast, state.tracks]);
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return;
+
+      if (event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void handleSaveSession();
+        return;
+      }
+
+      if (event.shiftKey && event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        void handleLoadSession(savedSessions[0]?.id);
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [handleLoadSession, handleSaveSession, savedSessions]);
 
   const fileItems: MenuItem[] = [
     {
       label: "Save Session",
       shortcut: "⌘S",
-      action: () => { setOpenMenu(null); showToast("Saving session…"); },
+      action: () => { void handleSaveSession(); },
     },
+    ...(savedSessions.length > 0
+      ? [
+          {
+            label: "Load Latest Session",
+            shortcut: "⇧⌘O",
+            action: () => { void handleLoadSession(savedSessions[0]?.id); },
+          },
+          ...savedSessions.slice(0, 4).map((session, index) => ({
+            label: `Load ${session.name}`,
+            shortcut: index === 0 ? "Recent" : undefined,
+            action: () => { void handleLoadSession(session.id); },
+            divider: index === 0,
+          })),
+        ]
+      : []),
     {
       label: "Export Stem Render (.wav)",
       shortcut: "⌘⇧E",
@@ -485,7 +568,28 @@ export default function Header() {
                 Playful Studio
               </span>
             </div>
-          ) : null}
+          ) : (
+            <button
+              onClick={() => {
+                setOpenMenu(null);
+                const root = document.documentElement;
+                root.classList.remove("wonder-kids-quake");
+                void root.offsetWidth;
+                root.classList.add("wonder-kids-quake");
+                window.setTimeout(() => root.classList.remove("wonder-kids-quake"), 720);
+                dispatch({ type: "SET_KIDS_MODE", payload: true });
+              }}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-sm border border-[#FACC15] bg-[#FFF7CC] hover:bg-[#FFF0A0] transition-colors"
+              title="Switch to Wonder Kids mode"
+            >
+              {(["K","I","D","S"] as const).map((l, i) => (
+                <span key={l} className="font-black text-[13px] leading-none"
+                  style={{ color: ["#60A5FA","#FACC15","#F43F5E","#FB923C"][i], fontFamily: "'Hiragino Maru Gothic ProN', 'Arial Rounded MT Bold', ui-rounded, system-ui, sans-serif", textShadow: "1px 1px 0 rgba(26,26,26,0.10)" }}>
+                  {l}
+                </span>
+              ))}
+            </button>
+          )}
         </div>
 
         <div className="flex-1" />
@@ -522,6 +626,25 @@ export default function Header() {
           </button>
         )}
 
+        {/* Settings */}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="w-[32px] h-[32px] rounded-sm border-2 border-[#1A1A1A] flex items-center justify-center hover:bg-[#F0F0EB] transition-colors text-[#1A1A1A]/40 hover:text-[#1A1A1A] bg-[#FDFDFB] shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
+            title="Audio engine settings"
+          >
+          <Settings size={14} strokeWidth={1.5} />
+        </button>
+
+        {/* Profile */}
+          <button
+            onClick={() => setProfileOpen(true)}
+            className="w-[32px] h-[32px] rounded-sm bg-[#1A1A1A] flex items-center justify-center hover:bg-[#333] transition-colors border-2 border-[#1A1A1A] shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
+            title=".wonderprofile"
+          >
+          <User size={13} strokeWidth={1.5} color="white" />
+        </button>
+
+        {/* KIDS toggle — far right */}
         <button
           onClick={() => {
             setOpenMenu(null);
@@ -553,24 +676,6 @@ export default function Header() {
             <span style={{ color: "#F43F5E", textShadow: "2px 2px 0 rgba(26,26,26,0.12)" }}>D</span>
             <span style={{ color: "#FB923C", textShadow: "2px 2px 0 rgba(26,26,26,0.12)" }}>S</span>
           </span>
-        </button>
-
-        {/* Settings */}
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="w-[32px] h-[32px] rounded-sm border-2 border-[#1A1A1A] flex items-center justify-center hover:bg-[#F0F0EB] transition-colors text-[#1A1A1A]/40 hover:text-[#1A1A1A] bg-[#FDFDFB] shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
-            title="Audio engine settings"
-          >
-          <Settings size={14} strokeWidth={1.5} />
-        </button>
-
-        {/* Profile */}
-          <button
-            onClick={() => setProfileOpen(true)}
-            className="w-[32px] h-[32px] rounded-sm bg-[#1A1A1A] flex items-center justify-center hover:bg-[#333] transition-colors border-2 border-[#1A1A1A] shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
-            title=".wonderprofile"
-          >
-          <User size={13} strokeWidth={1.5} color="white" />
         </button>
       </nav>
 

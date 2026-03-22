@@ -123,6 +123,7 @@ export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineR
 
             // Sync durationMeasures on all non-sliced blocks for this track to the
             // actual buffer duration so visual width matches real audio length.
+            if (track.loop) return;
             const bpm = stateRef.current.transport.bpm;
             const spm = (4 * 60) / bpm;
             const accurateDurationMeasures = durationSec / spm;

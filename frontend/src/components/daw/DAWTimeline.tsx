@@ -800,9 +800,11 @@ export function DAWTimeline({
             // Width: full clips use audioDurationSec (pixel-accurate to real buffer length).
             // Razor slices use durationMeasures since their length is defined by the cut point.
             const isSlice = (block.bufferOffsetSec ?? 0) > 0;
-            const widthSec = (!isSlice && track.audioDurationSec)
-              ? track.audioDurationSec
-              : block.durationMeasures * secPerMeasure(bpm);
+            const widthSec = track.loop
+              ? block.durationMeasures * secPerMeasure(bpm)
+              : (!isSlice && track.audioDurationSec)
+                ? track.audioDurationSec
+                : block.durationMeasures * secPerMeasure(bpm);
             const leftPx  = measureToX(block.startMeasure, bpm);
             const widthPx = widthSec * PIXELS_PER_SECOND;
             const topPx = tIdx * TRACK_ROW_HEIGHT + (kidsMode ? 8 : 5);

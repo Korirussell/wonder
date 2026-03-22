@@ -18,6 +18,7 @@ import { normalizeTrackPatch, withTrackMixDefaults } from "./mixUtils";
 
 type DAWAction =
   | { type: "SET_TRANSPORT"; payload: Partial<DAWTransport> }
+  | { type: "HYDRATE_SESSION"; payload: DAWState }
   | { type: "ADD_TRACK"; payload: DAWTrack }
   | { type: "UPDATE_TRACK"; payload: { id: string } & Partial<DAWTrack> }
   | { type: "DELETE_TRACK"; payload: string }
@@ -66,6 +67,12 @@ const initialState: DAWState = {
 
 function dawReducer(state: DAWState, action: DAWAction): DAWState {
   switch (action.type) {
+    case "HYDRATE_SESSION":
+      return {
+        ...action.payload,
+        tracks: action.payload.tracks.map((track) => withTrackMixDefaults(track)),
+      };
+
     case "SET_TRANSPORT":
       return {
         ...state,

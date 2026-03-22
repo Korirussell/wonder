@@ -340,7 +340,10 @@ async def generate_sound(body: GenerateRequest) -> dict[str, Any]:
 
 class GenerateSampleRequest(BaseModel):
     prompt: str
-    duration_seconds: float = 2.0
+    duration_seconds: float = 22.0
+
+
+_GENERATE_SAMPLE_SUFFIX = ", evolving 8-bar musical progression, seamless loop, no fade out"
 
 
 @app.post("/generate-sample")
@@ -350,7 +353,12 @@ async def generate_sample(body: GenerateSampleRequest) -> dict[str, Any]:
     Compatible with the frontend /api/generate-sample proxy route.
     """
     try:
-        result = handle_generate(body.prompt, duration_seconds=body.duration_seconds)
+        styled_prompt = body.prompt.rstrip() + _GENERATE_SAMPLE_SUFFIX
+        result = handle_generate(
+            styled_prompt,
+            duration_seconds=22.0,
+            category="musical",
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

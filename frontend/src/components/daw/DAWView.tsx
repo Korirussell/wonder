@@ -10,7 +10,6 @@ import { DAWTransportBar } from "./DAWTransportBar";
 import { DAWTrackList } from "./DAWTrackList";
 import { DAWTimeline } from "./DAWTimeline";
 import { DrumRack } from "./DrumRack";
-import { MixerDrawer } from "./MixerDrawer";
 import { KidsModeStage } from "./KidsModeStage";
 import ToneWaveformViz from "@/components/ToneWaveformViz";
 import type { DAWTrack, DrumPattern } from "@/types";
@@ -34,7 +33,6 @@ export default function DAWView() {
     dispatch: dispatch as React.Dispatch<{ type: string; payload?: unknown }>,
   });
   const [drumsOpen, setDrumsOpen] = useState(false);
-  const [mixerOpen, setMixerOpen] = useState(false);
   const { analysis, analyzing, analyze } = useAudioAnalysis();
   const stateRef = useRef(state);
   const kidsPlaybackTokenRef = useRef(0);
@@ -543,9 +541,6 @@ export default function DAWView() {
           payload: { monitorEnabled: !state.recording.monitorEnabled },
         })
       }
-      mixerOpen={!state.kidsMode && mixerOpen}
-      onToggleMixer={() => setMixerOpen((value) => (state.kidsMode ? false : !value))}
-      kidsMode={state.kidsMode}
       metronomeOn={metronomeOn}
       onToggleMetronome={handleToggleMetronome}
       countInOn={countInOn}
@@ -678,14 +673,6 @@ export default function DAWView() {
           }
         />
       </div>
-      {state.kidsMode ? null : (
-        <MixerDrawer
-          open={mixerOpen}
-          tracks={state.tracks}
-          onClose={() => setMixerOpen(false)}
-          onUpdateTrack={handleUpdateTrack}
-        />
-      )}
       {drumRack}
       {analysisBadge}
       {transportBar}

@@ -10,7 +10,6 @@ import {
   Drum,
   Grid3X3,
   Wand2,
-  SlidersHorizontal,
   Music2,
   Timer,
 } from "lucide-react";
@@ -31,9 +30,6 @@ interface DAWTransportBarProps {
   onToggleLoop?: () => void;
   monitorEnabled?: boolean;
   onToggleMonitor?: () => void;
-  mixerOpen?: boolean;
-  onToggleMixer?: () => void;
-  kidsMode?: boolean;
   metronomeOn?: boolean;
   onToggleMetronome?: () => void;
   countInOn?: boolean;
@@ -58,9 +54,6 @@ export function DAWTransportBar({
   onToggleLoop,
   monitorEnabled = false,
   onToggleMonitor,
-  mixerOpen = false,
-  onToggleMixer,
-  kidsMode = false,
   metronomeOn = false,
   onToggleMetronome,
   countInOn = false,
@@ -267,20 +260,6 @@ export function DAWTransportBar({
           Export
         </button>
 
-        {kidsMode ? null : (
-          <button
-            onClick={onToggleMixer}
-            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-sm font-mono text-[9px] font-bold uppercase tracking-widest border-2 transition-colors ${
-              mixerOpen
-                ? "bg-[#C1E1C1] border-[#C1E1C1] text-[#1A1A1A]"
-                : "bg-[#2c2c2c] border-[#3e3e3e] text-[#666] hover:text-[#bbb] hover:border-[#555]"
-            }`}
-            title="Toggle mixer"
-          >
-            <SlidersHorizontal size={11} strokeWidth={1.5} />
-            Mixer
-          </button>
-        )}
       </div>
 
       {/* BPM — visible on hover */}

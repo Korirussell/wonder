@@ -19,12 +19,12 @@ from services.sample_search import SampleSearchService
 router = APIRouter(tags=["generation"])
 
 # Silently injected to every /generate-sample call so all sounds match the Wonder vibe
-_WONDER_STYLE_SUFFIX = ", warm, analog, lo-fi aesthetic, vinyl noise, tape saturation"
+_WONDER_STYLE_SUFFIX = ", warm, analog, lo-fi aesthetic, vinyl noise, tape saturation, evolving 8-bar musical progression, seamless loop, no fade out"
 
 
 class GenerateSampleBody(BaseModel):
     prompt: str = Field(description="Natural-language description of the requested sound")
-    duration_seconds: float = Field(default=2.0, ge=0.5, le=5.0)
+    duration_seconds: float = Field(default=22.0, ge=0.5, le=22.0)
 
 
 @router.post(
@@ -36,7 +36,7 @@ def generate_sample(body: GenerateSampleBody) -> dict[str, str]:
     styled_prompt = body.prompt.strip() + _WONDER_STYLE_SUFFIX
     try:
         result = ElevenLabsService().generate_sound(
-            styled_prompt, duration_seconds=body.duration_seconds
+            styled_prompt, duration_seconds=22.0
         )
         return {
             "audio_base64": base64.b64encode(result.audio_bytes).decode("utf-8"),
