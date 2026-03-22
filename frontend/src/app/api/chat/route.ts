@@ -1,25 +1,21 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 
 const AGENT_API_URL = process.env.AGENT_API_URL || "http://localhost:8001";
 
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-}
-
-export async function POST(request: NextRequest): Promise<NextResponse> {
+export async function POST(request: NextRequest): Promise<Response> {
   const body = await request.json() as {
-    messages?: Message[];
+    messages?: Array<{ role: string; content: string }>;
     audioData?: string;
     mimeType?: string;
     midiContext?: Record<string, unknown>;
     rhythmContext?: Record<string, unknown>;
+    sessionId?: string | null;
   };
 
-  const { messages, audioData, mimeType, midiContext, rhythmContext } = body;
+  const { messages, audioData, mimeType, midiContext, rhythmContext, sessionId: clientSessionId } = body;
 
-  // Get or create session ID via header
-  let sessionId = request.headers.get("x-wonder-session-id");
+  // Get or create session
+  let sessionId = clientSessionId ?? request.headers.get("x-wonder-session-id");
   if (!sessionId) {
     try {
       const sessionRes = await fetch(`${AGENT_API_URL}/session/new`, {
@@ -27,23 +23,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: "default_user" }),
       });
-      const sessionData = await sessionRes.json() as { session_id?: string };
-      sessionId = sessionData.session_id ?? null;
+      const data = await sessionRes.json() as { session_id?: string };
+      sessionId = data.session_id ?? null;
     } catch {
       sessionId = null;
     }
   }
 
-  // Extract the last user message
   const lastMessage = messages?.findLast((m) => m.role === "user");
   const messageText = lastMessage?.content ?? "";
 
-  // Forward to Python ADK server
   let agentRes: Response;
   try {
-    agentRes = await fetch(`${AGENT_API_URL}/chat`, {
+    agentRes = await fetch(`${AGENT_API_URL}/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+      },
+      cache: "no-store",
       body: JSON.stringify({
         session_id: sessionId ?? "default",
         user_id: "default_user",
@@ -55,25 +53,26 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }),
     });
   } catch (err) {
-    return NextResponse.json(
-      { content: `Could not reach agent server at ${AGENT_API_URL}: ${err}` },
-      { status: 503 }
+    return new Response(
+      `data: ${JSON.stringify({ error: `Could not reach agent: ${err}` })}\n\n`,
+      { status: 503, headers: { "Content-Type": "text/event-stream" } }
     );
   }
 
   if (!agentRes.ok) {
     const errorText = await agentRes.text();
-    return NextResponse.json(
-      { content: `Agent error ${agentRes.status}: ${errorText}` },
-      { status: agentRes.status }
+    return new Response(
+      `data: ${JSON.stringify({ error: `Agent error ${agentRes.status}: ${errorText}` })}\n\n`,
+      { status: agentRes.status, headers: { "Content-Type": "text/event-stream" } }
     );
   }
 
-  const data = await agentRes.json() as { content?: string };
-  const response = NextResponse.json({ content: data.content ?? "" });
-
-  if (sessionId) {
-    response.headers.set("x-wonder-session-id", sessionId);
-  }
-  return response;
+  return new Response(agentRes.body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "x-wonder-session-id": sessionId ?? "",
+    },
+  });
 }
