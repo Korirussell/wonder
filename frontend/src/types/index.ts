@@ -101,6 +101,10 @@ export interface DAWTrack {
   audioBlob?: Blob;
   audioStorageId?: string; // IndexedDB key
   waveformCache?: number[];
+  // Loop stem config — set when track was generated as a looping backing track
+  loop?: boolean;
+  loopBars?: number;        // How many bars before the loop point
+  loopDurationSec?: number; // Exact audio duration in seconds (for loopEnd)
 }
 
 export interface DAWBlock {
@@ -126,10 +130,19 @@ export interface DrumPattern {
   openHat: boolean[];
 }
 
+export interface SampleLibraryEntry {
+  id: string;
+  name: string;
+  audioUrl: string; // data URI or blob URL
+  tags: string[];
+  createdAt: number; // Date.now()
+}
+
 export interface DAWState {
   transport: DAWTransport;
   tracks: DAWTrack[];
   blocks: DAWBlock[];
   selectedBlockId: string | null;
   drumPattern?: DrumPattern;
+  sampleLibrary: SampleLibraryEntry[];
 }

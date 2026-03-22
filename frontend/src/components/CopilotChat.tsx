@@ -1,13 +1,74 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import * as Tone from "tone";
 import { useChat } from "@ai-sdk/react";
 import { isToolUIPart } from "ai";
-import { Paperclip, Mic, StopCircle, Music2, X, Send, Bot, Search } from "lucide-react";
+import { Paperclip, Mic, StopCircle, Music2, X, Send, Bot, Search, Play, Square } from "lucide-react";
 import { useDAWContext } from "@/lib/DAWContext";
+import { toneEngine, type DrumSlot } from "@/lib/toneEngine";
 import { searchSamples } from "@/lib/sampleSearch";
 import ListeningAnalysis from "@/components/ListeningAnalysis";
 import type { AudioAttachment } from "@/types";
+
+// ─── Generated sounds panel ───────────────────────────────────────────────────
+
+interface GeneratedSound {
+  id: string;
+  name: string;
+  audioUrl: string; // data URI
+}
+
+function GeneratedSoundCard({ sound }: { sound: GeneratedSound }) {
+  const playerRef = useRef<Tone.Player | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  // Instantiate Tone.Player on mount (inside useEffect to respect AudioContext policy)
+  useEffect(() => {
+    const player = new Tone.Player({
+      url: sound.audioUrl,
+      autostart: false,
+      onload: () => setReady(true),
+    }).toDestination();
+    playerRef.current = player;
+    return () => { player.dispose(); };
+  }, [sound.audioUrl]);
+
+  const handlePlay = async () => {
+    if (!playerRef.current || !ready) return;
+    await Tone.start(); // resume AudioContext on user interaction
+    if (isPlaying) {
+      playerRef.current.stop();
+      setIsPlaying(false);
+    } else {
+      playerRef.current.start();
+      setIsPlaying(true);
+      // Reset state when clip ends
+      const duration = playerRef.current.buffer.duration * 1000;
+      setTimeout(() => setIsPlaying(false), duration);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 border border-[#E0E0E0] rounded-xl bg-white shadow-[2px_2px_0px_0px_rgba(0,0,0,0.04)]">
+      <button
+        onClick={handlePlay}
+        disabled={!ready}
+        className="w-7 h-7 flex-shrink-0 bg-[#2D2D2D] rounded-lg flex items-center justify-center disabled:opacity-30 hover:bg-[#444] transition-colors"
+        title={ready ? (isPlaying ? "Stop" : "Play") : "Loading…"}
+      >
+        {isPlaying
+          ? <Square size={10} color="white" strokeWidth={2.5} />
+          : <Play size={10} color="white" strokeWidth={2.5} />}
+      </button>
+      <div className="flex-1 min-w-0">
+        <p className="text-[11px] font-mono font-bold text-[#2D2D2D] truncate">{sound.name}</p>
+        {!ready && <p className="text-[9px] font-mono text-[#2D2D2D]/40">Loading…</p>}
+      </div>
+    </div>
+  );
+}
 
 const DAW_TRACK_COLORS = ["#C1E1C1","#E9D5FF","#FEF08A","#FCA5A5","#BAE6FD","#DDD6FE","#BBF7D0","#FED7AA"];
 
@@ -50,6 +111,8 @@ export default function CopilotChat() {
   const dawStateRef = useRef(dawState);
   useEffect(() => { dawStateRef.current = dawState; });
 
+  const [generatedSounds, setGeneratedSounds] = useState<GeneratedSound[]>([]);
+  const [loopGenerating, setLoopGenerating] = useState<{ name: string; durationSec: number; bars: number } | null>(null);
   const [pendingAudio, setPendingAudio] = useState<AudioAttachment | null>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -138,24 +201,227 @@ export default function CopilotChat() {
 
         case "generateAndPlaceAudio": {
           try {
-            const resp = await fetch("/api/sfx", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                description: args.description as string,
-                duration_seconds: (args.durationSeconds as number) ?? 2,
-              }),
-            });
-            if (!resp.ok) { result = "Failed to generate audio — check ElevenLabs API key"; break; }
-            const audioBlob = await resp.blob();
+            let audioBlob: Blob | null = null;
+            let audioBase64: string | null = null;
+            let strategyNote = "";
+
+            // ① Try /generate-sample (FastAPI base64 endpoint — no filesystem paths)
+            try {
+              const genResp = await fetch("/api/generate-sample", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  prompt: args.description as string,
+                  duration_seconds: (args.durationSeconds as number) ?? 2,
+                }),
+              });
+              if (genResp.ok) {
+                const genResult = await genResp.json() as { audio_base64: string; prompt: string };
+                audioBase64 = genResult.audio_base64;
+                strategyNote = " (generated)";
+              }
+            } catch { /* backend offline, fall through */ }
+
+            if (audioBase64) {
+              // Convert base64 → data URI → Tone.Player (handled in GeneratedSoundCard via state)
+              // Also convert to Blob so the DAW timeline waveform can render it
+              const audioUrl = "data:audio/mp3;base64," + audioBase64;
+              const byteChars = atob(audioBase64);
+              const byteArr = new Uint8Array(byteChars.length);
+              for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
+              audioBlob = new Blob([byteArr], { type: "audio/mpeg" });
+
+              // Add to the Generated Sounds panel (renders its own Tone.Player + play button)
+              const soundId = crypto.randomUUID();
+              setGeneratedSounds(prev => [...prev, {
+                id: soundId,
+                name: args.trackName as string,
+                audioUrl,
+              }]);
+
+              // Push into the global Sample Library (Browse tab)
+              dawDispatch({
+                type: "ADD_TO_LIBRARY",
+                payload: {
+                  id: soundId,
+                  name: args.trackName as string,
+                  audioUrl,
+                  tags: ["generated", "elevenlabs", "lo-fi"],
+                  createdAt: Date.now(),
+                },
+              });
+            } else {
+              // ② Fallback: smart backend (retrieve from library or generate + save)
+              try {
+                const smartResp = await fetch("/api/samples/generate", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    prompt: args.description as string,
+                    duration_seconds: (args.durationSeconds as number) ?? 2,
+                  }),
+                });
+                if (smartResp.ok) {
+                  const smartResult = await smartResp.json() as { strategy: string; sample_id: string; audio_url: string };
+                  const audioResp = await fetch(`/api/samples/${smartResult.sample_id}/audio`);
+                  if (audioResp.ok) {
+                    audioBlob = await audioResp.blob();
+                    strategyNote = smartResult.strategy === "retrieved" ? " (from library)" : " (generated)";
+                  }
+                }
+              } catch { /* backend offline, fall through */ }
+            }
+
+            // ③ Last resort: direct ElevenLabs via /api/sfx (binary response)
+            if (!audioBlob) {
+              const sfxResp = await fetch("/api/sfx", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  description: args.description as string,
+                  duration_seconds: (args.durationSeconds as number) ?? 2,
+                }),
+              });
+              if (!sfxResp.ok) { result = "Failed to generate audio — check ElevenLabs API key"; break; }
+              audioBlob = await sfxResp.blob();
+            }
+
+            // Place on DAW timeline
             const trackId = crypto.randomUUID();
             const color = (args.color as string) ?? DAW_TRACK_COLORS[s.tracks.length % DAW_TRACK_COLORS.length];
             dawDispatch({ type: "ADD_TRACK", payload: { id: trackId, name: args.trackName as string, color, muted: false, volume: 80 } });
             dawDispatch({ type: "LOAD_AUDIO", payload: { trackId, blob: audioBlob } });
             dawDispatch({ type: "ADD_BLOCK", payload: { id: crypto.randomUUID(), trackId, name: args.trackName as string, startMeasure: (args.startMeasure as number) ?? 1, durationMeasures: (args.durationMeasures as number) ?? 4 } });
-            result = `Audio generated and placed on track "${args.trackName}"`;
+            result = `Audio placed on track "${args.trackName}"${strategyNote}`;
           } catch {
             result = "Audio generation failed";
+          }
+          break;
+        }
+
+        case "loadSampleIntoPad": {
+          const slot = args.slot as DrumSlot;
+          const validSlots: DrumSlot[] = ["kick", "snare", "hihat", "openHat"];
+          if (!validSlots.includes(slot)) { result = `Invalid slot "${slot}". Use: kick, snare, hihat, openHat`; break; }
+          try {
+            let audioBlob: Blob | null = null;
+            const dur = (args.durationSeconds as number) ?? 1.0;
+
+            // Try /generate-sample (base64 FastAPI endpoint)
+            try {
+              const genResp = await fetch("/api/generate-sample", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ prompt: args.description as string, duration_seconds: dur }),
+              });
+              if (genResp.ok) {
+                const genResult = await genResp.json() as { audio_base64: string };
+                const byteChars = atob(genResult.audio_base64);
+                const byteArr = new Uint8Array(byteChars.length);
+                for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
+                audioBlob = new Blob([byteArr], { type: "audio/mpeg" });
+              }
+            } catch { /* offline */ }
+
+            // Fallback: /api/sfx
+            if (!audioBlob) {
+              const sfxResp = await fetch("/api/sfx", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ description: args.description as string, duration_seconds: dur }),
+              });
+              if (sfxResp.ok) audioBlob = await sfxResp.blob();
+            }
+
+            if (!audioBlob) { result = `Failed to generate sample for ${slot}`; break; }
+
+            await toneEngine.init();
+            const sampleName = (args.description as string).slice(0, 24);
+            await toneEngine.loadDrumSampleFromBlob(slot, audioBlob, sampleName);
+
+            // Tell the DrumRack UI to refresh its sample name display
+            const refresh = (window as unknown as Record<string, unknown>).__drumRackRefresh;
+            if (typeof refresh === "function") (refresh as () => void)();
+
+            result = `Loaded "${sampleName}" into ${slot} pad`;
+          } catch (e) {
+            result = `loadSampleIntoPad failed: ${e}`;
+          }
+          break;
+        }
+
+        case "generateLoop": {
+          // ── BPM-to-seconds math ──────────────────────────────────────────
+          const bpm          = dawStateRef.current.transport.bpm;
+          const bars         = Math.max(1, Math.min(8, (args.bars as number) ?? 4));
+          const isLoop       = (args.isLoop as boolean) ?? true;
+          const totalBeats   = bars * 4;                                    // 4/4 time
+          const rawDuration  = (totalBeats / bpm) * 60;                    // seconds
+          const durationSec  = Math.min(rawDuration, 22);                  // ElevenLabs cap
+
+          // Inject BPM into prompt silently — AI omits it per system prompt instruction
+          const enrichedPrompt = `${(args.description as string).trim()}, ${Math.round(bpm)} BPM`;
+
+          setLoopGenerating({ name: args.trackName as string, durationSec, bars });
+
+          try {
+            const genResp = await fetch("/api/generate-loop", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                prompt:           enrichedPrompt,
+                duration_seconds: durationSec,
+                bars,
+                bpm,
+                loop:             isLoop,
+              }),
+            });
+
+            if (!genResp.ok) {
+              const errText = await genResp.text().catch(() => "unknown");
+              result = `Loop generation failed: ${errText}`;
+              break;
+            }
+
+            const genResult = await genResp.json() as { audio_base64: string; duration_seconds: number };
+            const audioUrl   = "data:audio/mp3;base64," + genResult.audio_base64;
+
+            // base64 → Blob (for DAW timeline waveform + LOAD_AUDIO dispatch)
+            const byteChars = atob(genResult.audio_base64);
+            const byteArr   = new Uint8Array(byteChars.length);
+            for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
+            const audioBlob  = new Blob([byteArr], { type: "audio/mpeg" });
+
+            // Create track with loop metadata so toneEngine sets loopEnd correctly
+            const trackId = crypto.randomUUID();
+            const color   = (args.color as string) ?? DAW_TRACK_COLORS[s.tracks.length % DAW_TRACK_COLORS.length];
+            dawDispatch({ type: "ADD_TRACK", payload: {
+              id: trackId, name: args.trackName as string, color,
+              muted: false, volume: 80,
+              loop: isLoop, loopBars: bars, loopDurationSec: durationSec,
+            }});
+            dawDispatch({ type: "LOAD_AUDIO",  payload: { trackId, blob: audioBlob } });
+            dawDispatch({ type: "ADD_BLOCK",   payload: {
+              id: crypto.randomUUID(), trackId,
+              name:             args.trackName as string,
+              startMeasure:     (args.startMeasure as number) ?? 1,
+              durationMeasures: bars,
+            }});
+
+            // Add to Browse library + local sounds panel
+            const soundId = crypto.randomUUID();
+            setGeneratedSounds(prev => [...prev, { id: soundId, name: args.trackName as string, audioUrl }]);
+            dawDispatch({ type: "ADD_TO_LIBRARY", payload: {
+              id: soundId, name: args.trackName as string, audioUrl,
+              tags: ["loop", `${bars}bars`, `${Math.round(bpm)}bpm`, "generated"],
+              createdAt: Date.now(),
+            }});
+
+            result = `Loop "${args.trackName}" placed: ${bars} bars at ${Math.round(bpm)} BPM (${durationSec.toFixed(1)}s)${isLoop ? ", looping" : ""}`;
+          } catch (e) {
+            result = `generateLoop failed: ${e}`;
+          } finally {
+            setLoopGenerating(null);
           }
           break;
         }
@@ -368,6 +634,55 @@ export default function CopilotChat() {
               <X size={12} strokeWidth={2} />
             </button>
           )}
+        </div>
+      )}
+
+      {/* Loop composing progress bar */}
+      {loopGenerating && (
+        <>
+          {/* Inline keyframe — safe in React, avoids globals.css dependency */}
+          <style>{`
+            @keyframes wonder-loop-fill {
+              from { width: 0% }
+              to   { width: 100% }
+            }
+          `}</style>
+          <div className="mx-4 mb-2 border-2 border-[#1A1A1A] rounded-xl bg-white p-3 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] flex-shrink-0">
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-[#1A1A1A]">
+                Composing Loop
+              </span>
+              <span className="font-mono text-[9px] text-[#1A1A1A]/50">
+                {loopGenerating.bars} bars · {loopGenerating.durationSec.toFixed(1)}s
+              </span>
+            </div>
+            {/* Progress track */}
+            <div className="h-3 bg-[#F0F0EE] rounded-full overflow-hidden border border-[#D8D8D8]">
+              <div
+                className="h-full rounded-full bg-[#C1E1C1]"
+                style={{
+                  animation: `wonder-loop-fill ${loopGenerating.durationSec}s linear forwards`,
+                  // Overshoot slightly so the bar is always "full" by the time the response arrives
+                }}
+              />
+            </div>
+            <p className="font-mono text-[9px] text-[#1A1A1A]/50 mt-1.5 truncate">
+              {loopGenerating.name}
+            </p>
+          </div>
+        </>
+      )}
+
+      {/* Generated Sounds panel */}
+      {generatedSounds.length > 0 && (
+        <div className="mx-4 mb-2 border border-[#E0E0E0] rounded-xl bg-[#FAFAF8] p-3 space-y-2 flex-shrink-0">
+          <div className="flex items-center justify-between mb-1">
+            <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-[#2D2D2D]/50">Generated Sounds</span>
+            <button onClick={() => setGeneratedSounds([])} className="text-[9px] font-mono text-[#2D2D2D]/30 hover:text-[#2D2D2D]/70 transition-colors">Clear</button>
+          </div>
+          {generatedSounds.map(sound => (
+            <GeneratedSoundCard key={sound.id} sound={sound} />
+          ))}
         </div>
       )}
 

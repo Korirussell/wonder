@@ -15,9 +15,9 @@ export default function Header() {
 
   return (
     <>
-      <nav className="flex-shrink-0 flex items-center px-5 h-12 bg-white border-b border-[#DEDEDE] z-10 relative gap-4">
+      <nav className="flex-shrink-0 flex items-center px-5 h-[44px] bg-[#FDFDFB] border-b border-[#D8D8D2] z-10 relative gap-4">
         {/* Logo */}
-        <span className="text-[18px] font-black text-[#2D2D2D] italic font-headline tracking-tighter mr-2 select-none">
+        <span className="text-[17px] font-black text-[#2D2D2D] italic font-headline tracking-tighter mr-3 select-none">
           Wonder
         </span>
 
@@ -27,11 +27,10 @@ export default function Header() {
             <button
               key={item}
               onClick={() => setActiveNav(item)}
-              className={`px-3 py-1 text-[13px] rounded transition-colors ${
-                activeNav === item
+              className={`px-3 py-1 text-[12.5px] rounded transition-colors font-sans ${activeNav === item
                   ? "text-[#3da84a] font-semibold"
                   : "text-[#2D2D2D]/50 hover:text-[#2D2D2D] font-medium"
-              }`}
+                }`}
             >
               {item}
             </button>
@@ -40,29 +39,29 @@ export default function Header() {
 
         <div className="flex-1" />
 
-        {/* BPM / KEY / TIME display */}
-        <div className="flex border border-[#D8D8D8] rounded overflow-hidden">
-          <div className="flex flex-col items-center justify-center px-5 py-1 border-r border-[#D8D8D8]">
-            <span className="text-[8.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[3px]">
+        {/* BPM / KEY / TIME display — matches the mockup's top-right readout */}
+        <div className="flex border border-[#D8D8D2] rounded overflow-hidden">
+          <div className="flex flex-col items-center justify-center px-4 py-1 border-r border-[#D8D8D2] bg-[#FAFAF6]">
+            <span className="text-[7.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[2px]">
               BPM
             </span>
-            <span className="text-[14px] font-bold font-mono text-[#2D2D2D] leading-none">
+            <span className="text-[13px] font-bold font-mono text-[#1a1a1a] leading-none tabular-nums">
               {session.bpm.toFixed(2)}
             </span>
           </div>
-          <div className="flex flex-col items-center justify-center px-5 py-1 border-r border-[#D8D8D8]">
-            <span className="text-[8.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[3px]">
+          <div className="flex flex-col items-center justify-center px-4 py-1 border-r border-[#D8D8D2] bg-[#FAFAF6]">
+            <span className="text-[7.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[2px]">
               KEY
             </span>
-            <span className="text-[14px] font-bold font-mono text-[#E03030] leading-none">
+            <span className="text-[13px] font-bold font-mono text-[#D32F2F] leading-none">
               {session.key || "F Minor"}
             </span>
           </div>
-          <div className="flex flex-col items-center justify-center px-5 py-1">
-            <span className="text-[8.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[3px]">
+          <div className="flex flex-col items-center justify-center px-4 py-1 bg-[#FAFAF6]">
+            <span className="text-[7.5px] font-mono font-bold uppercase tracking-[0.18em] text-[#aaa] leading-none mb-[2px]">
               TIME
             </span>
-            <span className="text-[14px] font-bold font-mono text-[#2D2D2D] leading-none">
+            <span className="text-[13px] font-bold font-mono text-[#1a1a1a] leading-none">
               4 / 4
             </span>
           </div>
@@ -70,13 +69,16 @@ export default function Header() {
 
         {/* Settings + profile */}
         <button
-          onClick={() => setProfileOpen(true)}
-          className="w-[34px] h-[34px] rounded-full border border-[#D8D8D8] flex items-center justify-center hover:bg-gray-50 transition-colors text-[#2D2D2D]/50 hover:text-[#2D2D2D]"
+          className="w-[32px] h-[32px] rounded-full border border-[#D8D8D2] flex items-center justify-center hover:bg-[#F0F0EB] transition-colors text-[#2D2D2D]/40 hover:text-[#2D2D2D]"
         >
-          <Settings size={15} strokeWidth={1.5} />
+          <Settings size={14} strokeWidth={1.5} />
         </button>
-        <button className="w-[34px] h-[34px] rounded-full bg-[#2D2D2D] flex items-center justify-center">
-          <User size={14} strokeWidth={1.5} color="white" />
+        <button
+          onClick={() => setProfileOpen(true)}
+          className="w-[32px] h-[32px] rounded-full bg-[#2D2D2D] flex items-center justify-center hover:bg-[#1a1a1a] transition-colors"
+          title="Profile"
+        >
+          <User size={13} strokeWidth={1.5} color="white" />
         </button>
       </nav>
 

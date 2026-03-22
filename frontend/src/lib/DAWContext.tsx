@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useReducer, type ReactNode } from "react";
-import type { DAWState, DAWTrack, DAWBlock, DAWTransport, DrumPattern } from "@/types";
+import type { DAWState, DAWTrack, DAWBlock, DAWTransport, DrumPattern, SampleLibraryEntry } from "@/types";
 
 // ─── Action Types ─────────────────────────────────────────────────────────────
 
@@ -15,7 +15,8 @@ type DAWAction =
   | { type: "DELETE_BLOCK"; payload: string }
   | { type: "LOAD_AUDIO"; payload: { trackId: string; blob: Blob } }
   | { type: "SET_SELECTED_BLOCK"; payload: string | null }
-  | { type: "SET_DRUM_PATTERN"; payload: Partial<DrumPattern> };
+  | { type: "SET_DRUM_PATTERN"; payload: Partial<DrumPattern> }
+  | { type: "ADD_TO_LIBRARY"; payload: SampleLibraryEntry };
 
 // ─── Initial State ────────────────────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ const initialState: DAWState = {
   tracks: [],
   blocks: [],
   selectedBlockId: null,
+  sampleLibrary: [],
   drumPattern: {
     kick:    [false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false],
     snare:   [false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false],
@@ -111,6 +113,12 @@ function dawReducer(state: DAWState, action: DAWAction): DAWState {
       return {
         ...state,
         drumPattern: { ...state.drumPattern!, ...action.payload },
+      };
+
+    case "ADD_TO_LIBRARY":
+      return {
+        ...state,
+        sampleLibrary: [action.payload, ...state.sampleLibrary],
       };
 
     default:

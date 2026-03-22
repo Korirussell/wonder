@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { DrumPattern } from "@/types";
-import { toneEngine } from "@/lib/toneEngine";
+import { toneEngine, type DrumSlot } from "@/lib/toneEngine";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -12,19 +12,90 @@ interface DrumRackProps {
   onPatternChange: (patch: Partial<DrumPattern>) => void;
 }
 
-const ROW_NAMES: Array<keyof DrumPattern> = ["kick", "snare", "hihat", "openHat"];
-const ROW_LABELS: Record<keyof DrumPattern, string> = {
+const ROW_NAMES: DrumSlot[] = ["kick", "snare", "hihat", "openHat"];
+const ROW_LABELS: Record<DrumSlot, string> = {
   kick: "Kick",
   snare: "Snare",
   hihat: "HH",
   openHat: "OH",
 };
-const ROW_COLORS: Record<keyof DrumPattern, string> = {
+const ROW_COLORS: Record<DrumSlot, string> = {
   kick:    "#FCA5A5",
   snare:   "#FEF08A",
   hihat:   "#BAE6FD",
   openHat: "#C1E1C1",
 };
+
+// ─── Sample Pad ────────────────────────────────────────────────────────────────
+
+function SamplePad({
+  slot,
+  color,
+  sampleName,
+  onLoad,
+}: {
+  slot: DrumSlot;
+  color: string;
+  sampleName: string | null;
+  onLoad: (slot: DrumSlot, file: File) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [flashing, setFlashing] = useState(false);
+
+  const trigger = async () => {
+    await toneEngine.init();
+    toneEngine.triggerDrumPad(slot);
+    setFlashing(true);
+    setTimeout(() => setFlashing(false), 80);
+  };
+
+  return (
+    <div className="relative flex-shrink-0 w-20 h-8 group">
+      {/* Pad button */}
+      <button
+        onClick={trigger}
+        title={sampleName ? `Trigger: ${sampleName}` : "No sample loaded — click folder to load"}
+        className="w-full h-full border-2 border-white/20 font-mono text-[8px] font-bold uppercase tracking-widest leading-tight px-1 text-center transition-all overflow-hidden"
+        style={{
+          backgroundColor: flashing
+            ? color
+            : sampleName
+            ? `${color}40`
+            : "rgba(255,255,255,0.04)",
+          borderColor: sampleName ? `${color}80` : "rgba(255,255,255,0.12)",
+          color: sampleName ? color : "rgba(255,255,255,0.2)",
+        }}
+      >
+        <span className="block truncate leading-tight">
+          {sampleName ?? "empty"}
+        </span>
+      </button>
+
+      {/* Load button — always visible on hover, small folder icon top-right */}
+      <button
+        onClick={() => fileRef.current?.click()}
+        title="Load sample"
+        className="absolute top-0.5 right-0.5 w-4 h-4 bg-black/40 rounded-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-white/60 hover:text-white"
+      >
+        <svg width="9" height="9" viewBox="0 0 12 12" fill="none">
+          <path d="M1 3.5C1 2.95 1.45 2.5 2 2.5H5L6.5 4H10C10.55 4 11 4.45 11 5V9.5C11 10.05 10.55 10.5 10 10.5H2C1.45 10.5 1 10.05 1 9.5V3.5Z" stroke="currentColor" strokeWidth="1.2" fill="none"/>
+        </svg>
+      </button>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="audio/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onLoad(slot, file);
+          e.target.value = "";
+        }}
+      />
+    </div>
+  );
+}
 
 // ─── Component ─────────────────────────────────────────────────────────────────
 
@@ -34,6 +105,15 @@ export function DrumRack({ pattern, bpm, onPatternChange }: DrumRackProps) {
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepRef = useRef(0);
   const bpmRef = useRef(bpm);
+
+  // Track loaded sample names so pads update when AI loads samples
+  const [sampleNames, setSampleNames] = useState<Record<DrumSlot, string | null>>(
+    () => toneEngine.getAllSampleNames()
+  );
+
+  const refreshNames = useCallback(() => {
+    setSampleNames(toneEngine.getAllSampleNames());
+  }, []);
 
   // Keep bpm ref current
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
@@ -50,6 +130,14 @@ export function DrumRack({ pattern, bpm, onPatternChange }: DrumRackProps) {
     }
   }, [bpm]);
 
+  // Load a user-dropped file into the correct slot
+  const handleSampleLoad = useCallback(async (slot: DrumSlot, file: File) => {
+    await toneEngine.init();
+    const url = URL.createObjectURL(file);
+    await toneEngine.loadDrumSample(slot, url, file.name.replace(/\.[^/.]+$/, ""));
+    refreshNames();
+  }, [refreshNames]);
+
   const startPlaying = useCallback(async () => {
     await toneEngine.init();
     toneEngine.setBPM(bpmRef.current);
@@ -62,9 +150,8 @@ export function DrumRack({ pattern, bpm, onPatternChange }: DrumRackProps) {
     await toneEngine.play();
     setPlaying(true);
 
-    // Visual step indicator (UI only — audio handled by toneEngine)
     stepRef.current = 0;
-    const stepMs = (60 / bpmRef.current / 4) * 1000; // 16th note
+    const stepMs = (60 / bpmRef.current / 4) * 1000;
     stepIntervalRef.current = setInterval(() => {
       setCurrentStep(stepRef.current % 16);
       stepRef.current++;
@@ -83,19 +170,15 @@ export function DrumRack({ pattern, bpm, onPatternChange }: DrumRackProps) {
   }, []);
 
   const togglePlay = useCallback(async () => {
-    if (playing) {
-      stopPlaying();
-    } else {
-      await startPlaying();
-    }
+    if (playing) stopPlaying();
+    else await startPlaying();
   }, [playing, startPlaying, stopPlaying]);
 
-  // Cleanup on unmount
   useEffect(() => () => {
     if (stepIntervalRef.current) clearInterval(stepIntervalRef.current);
   }, []);
 
-  const toggleStep = (row: keyof DrumPattern, step: number) => {
+  const toggleStep = (row: DrumSlot, step: number) => {
     const current = [...(pattern[row] ?? Array(16).fill(false))];
     current[step] = !current[step];
     onPatternChange({ [row]: current });
@@ -106,11 +189,19 @@ export function DrumRack({ pattern, bpm, onPatternChange }: DrumRackProps) {
     onPatternChange({ kick: [...empty], snare: [...empty], hihat: [...empty], openHat: [...empty] });
   };
 
+  // Expose refreshNames globally so CopilotChat can call it after AI loads a sample
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__drumRackRefresh = refreshNames;
+    return () => { delete (window as unknown as Record<string, unknown>).__drumRackRefresh; };
+  }, [refreshNames]);
+
   return (
     <div className="bg-[#1A1A1A] border-b-2 border-[#2D2D2D] px-5 py-4 flex flex-col gap-3">
       {/* Header row */}
       <div className="flex items-center gap-3">
-        <span className="font-headline text-[11px] font-extrabold uppercase tracking-widest text-white/50">Drum Rack</span>
+        <span className="font-headline text-[11px] font-extrabold uppercase tracking-widest text-white/50">
+          Drum Rack
+        </span>
         <button
           onClick={togglePlay}
           className={`border-2 rounded-lg px-4 py-1 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors ${
@@ -127,7 +218,19 @@ export function DrumRack({ pattern, bpm, onPatternChange }: DrumRackProps) {
         >
           Clear
         </button>
-        <span className="font-mono text-[9px] text-white/25 ml-auto uppercase tracking-widest">16 Steps · {bpm} BPM</span>
+        <span className="font-mono text-[9px] text-white/25 ml-auto uppercase tracking-widest">
+          16 Steps · {bpm} BPM
+        </span>
+      </div>
+
+      {/* Pad legend */}
+      <div className="flex items-center gap-2 pl-[2.5rem]">
+        <span className="font-mono text-[8px] uppercase tracking-widest text-white/20 w-20 shrink-0">
+          Pad (click)
+        </span>
+        <span className="font-mono text-[8px] uppercase tracking-widest text-white/20 ml-2">
+          Step sequencer ↓
+        </span>
       </div>
 
       {/* Step grid */}
@@ -138,6 +241,14 @@ export function DrumRack({ pattern, bpm, onPatternChange }: DrumRackProps) {
             <span className="font-mono text-[9px] font-bold uppercase w-8 shrink-0 text-right text-white/40">
               {ROW_LABELS[row]}
             </span>
+
+            {/* Sample pad */}
+            <SamplePad
+              slot={row}
+              color={ROW_COLORS[row]}
+              sampleName={sampleNames[row]}
+              onLoad={handleSampleLoad}
+            />
 
             {/* Steps */}
             <div className="flex gap-[3px] flex-1">

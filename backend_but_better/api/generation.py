@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import base64
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from api.samples import get_sample_database, get_sample_search_service
+from services.elevenlabs_service import ElevenLabsService
 from services.generation_orchestrator import (
     GenerateInstrumentRequest,
     GenerateInstrumentResponse,
@@ -15,6 +18,67 @@ from services.sample_search import SampleSearchService
 
 
 router = APIRouter(tags=["generation"])
+
+# Silently injected to every /generate-sample call so all sounds match the Wonder vibe
+_WONDER_STYLE_SUFFIX = ", warm, analog, lo-fi aesthetic, vinyl noise, tape saturation"
+
+
+class GenerateSampleBody(BaseModel):
+    prompt: str = Field(description="Natural-language description of the requested sound")
+    duration_seconds: float = Field(default=2.0, ge=0.5, le=5.0)
+
+
+@router.post(
+    "/generate-sample",
+    summary="Generate a custom sound effect and return as base64 audio",
+    description="Calls ElevenLabs with the Wonder style profile baked in. Returns raw MP3 as a base64 string so the frontend can load it as a data URI without touching the filesystem.",
+)
+def generate_sample(body: GenerateSampleBody) -> dict[str, str]:
+    styled_prompt = body.prompt.strip() + _WONDER_STYLE_SUFFIX
+    try:
+        result = ElevenLabsService().generate_sound(
+            styled_prompt, duration_seconds=body.duration_seconds
+        )
+        return {
+            "audio_base64": base64.b64encode(result.audio_bytes).decode("utf-8"),
+            "prompt": body.prompt,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+class GenerateLoopBody(BaseModel):
+    prompt: str = Field(description="Enriched description including BPM and key (injected by frontend)")
+    duration_seconds: float = Field(default=8.0, ge=0.5, le=22.0, description="Exact BPM-derived duration, clamped to ElevenLabs 22s max")
+    bars: int = Field(default=4, ge=1, le=16)
+    bpm: float = Field(default=120.0)
+    loop: bool = Field(default=True)
+
+
+@router.post(
+    "/generate-loop",
+    summary="Generate a BPM-synced looping backing track and return as base64",
+    description=(
+        "Receives a pre-enriched prompt (BPM + key already injected by the frontend). "
+        "Appends the Wonder style suffix and calls ElevenLabs at the exact calculated duration. "
+        "Returns raw MP3 as base64 — no filesystem writes, safe across split dev environments."
+    ),
+)
+def generate_loop(body: GenerateLoopBody) -> dict[str, object]:
+    styled_prompt = body.prompt.strip() + _WONDER_STYLE_SUFFIX
+    try:
+        result = ElevenLabsService().generate_sound(
+            styled_prompt, duration_seconds=body.duration_seconds
+        )
+        return {
+            "audio_base64": base64.b64encode(result.audio_bytes).decode("utf-8"),
+            "prompt": body.prompt,
+            "duration_seconds": body.duration_seconds,
+            "bars": body.bars,
+            "bpm": body.bpm,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 class GenerateInstrumentBody(BaseModel):

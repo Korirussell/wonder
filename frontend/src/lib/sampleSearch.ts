@@ -1,6 +1,8 @@
 /**
- * Sample Search — lightweight frontend .filter() over samples.json
- * No backend needed. Pure vibe-tag matching.
+ * Sample Search — semantic search via backend_but_better
+ *
+ * Calls /api/samples/search which proxies to the Python backend's
+ * LanceDB vector search. Falls back to empty results if backend is offline.
  */
 
 export interface Sample {
@@ -16,82 +18,73 @@ export interface Sample {
   source: string;
 }
 
-interface SamplesData {
-  samples: Sample[];
+// Shape returned by the backend's SampleSearchResult
+interface BackendSearchResult {
+  id: string;
+  file_path: string;
+  file_name: string;
+  source: string;
+  category?: string;
+  sub_category?: string;
+  tags: string[];
+  description?: string;
+  duration?: number;
+  similarity_score: number;
 }
 
-let cachedSamples: Sample[] | null = null;
+function backendToSample(r: BackendSearchResult): Sample {
+  return {
+    id: r.id,
+    name: r.file_name,
+    // Audio served through the proxy route
+    url: `/api/samples/${r.id}/audio`,
+    type: "one-shot",
+    instrument: r.sub_category ?? r.category ?? "unknown",
+    tags: r.tags ?? [],
+    bpm: null,
+    key: null,
+    duration_seconds: r.duration ?? 0,
+    source: r.source,
+  };
+}
 
 /**
- * Load samples.json from public directory (client-side)
+ * Semantic search via backend_but_better (LanceDB + Gemini embeddings).
+ * Returns an empty array when the backend is unreachable.
  */
-export async function loadSamples(): Promise<Sample[]> {
-  if (cachedSamples) return cachedSamples;
+export async function searchSamples(
+  query: string,
+  limit = 10
+): Promise<Sample[]> {
+  if (!query.trim()) return [];
 
   try {
-    const res = await fetch("/samples.json");
-    const data: SamplesData = await res.json();
-    cachedSamples = data.samples;
-    return cachedSamples;
+    const res = await fetch("/api/samples/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, limit }),
+    });
+
+    if (!res.ok) return [];
+
+    const results: BackendSearchResult[] = await res.json();
+    return results.map(backendToSample);
   } catch (error) {
-    console.error("[Wonder] Failed to load samples.json:", error);
+    console.error("[Wonder] Sample search failed:", error);
     return [];
   }
-}
-
-/**
- * Search samples by a natural language query.
- * Splits the query into words and matches against tags, name, instrument, and source.
- * Returns results sorted by relevance (number of matching words).
- */
-export async function searchSamples(query: string): Promise<Sample[]> {
-  const samples = await loadSamples();
-  if (!query.trim()) return samples;
-
-  const words = query
-    .toLowerCase()
-    .split(/[\s,]+/)
-    .filter((w) => w.length > 1);
-
-  const scored = samples.map((sample) => {
-    const searchable = [
-      ...sample.tags,
-      sample.name.toLowerCase(),
-      sample.instrument.toLowerCase(),
-      sample.source.toLowerCase(),
-      sample.type,
-      sample.key?.toLowerCase() ?? "",
-    ].join(" ");
-
-    let score = 0;
-    for (const word of words) {
-      if (searchable.includes(word)) score++;
-    }
-    return { sample, score };
-  });
-
-  return scored
-    .filter((s) => s.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .map((s) => s.sample);
 }
 
 /**
  * Find samples by instrument type
  */
 export async function findByInstrument(instrument: string): Promise<Sample[]> {
-  const samples = await loadSamples();
-  return samples.filter(
-    (s) => s.instrument.toLowerCase() === instrument.toLowerCase()
-  );
+  return searchSamples(instrument, 20);
 }
 
 /**
- * Find loops that match a given BPM (within ±5 tolerance)
+ * Find loops that match a given BPM — passes BPM hint in the query
  */
-export async function findByBPM(bpm: number, tolerance: number = 5): Promise<Sample[]> {
-  const samples = await loadSamples();
-  return samples.filter(
-    (s) => s.bpm !== null && Math.abs(s.bpm - bpm) <= tolerance
-  );
+export async function findByBPM(bpm: number): Promise<Sample[]> {
+  return searchSamples(`${bpm} bpm`, 20);
 }

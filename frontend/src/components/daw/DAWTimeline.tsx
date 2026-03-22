@@ -4,8 +4,68 @@ import { useEffect, useRef, useState } from "react";
 import type { DAWTransport, DAWTrack, DAWBlock } from "@/types";
 import { Waveform } from "@/components/Waveform";
 
-const TRACK_ROW_HEIGHT = 72; // px per track row
-const HEADER_HEIGHT = 40; // px for the time-ruler header
+const TRACK_ROW_HEIGHT = 72;   // must match DAWTrackList
+const HEADER_HEIGHT    = 40;
+export const PIXELS_PER_SECOND = 50; // global time-to-pixel constant
+
+function secPerMeasure(bpm: number) {
+  return (4 * 60) / bpm; // 4/4 time
+}
+
+function measureToX(measure: number, bpm: number) {
+  return (measure - 1) * secPerMeasure(bpm) * PIXELS_PER_SECOND;
+}
+
+function xToMeasure(x: number, bpm: number) {
+  return x / (secPerMeasure(bpm) * PIXELS_PER_SECOND) + 1;
+}
+
+function snapMeasure(raw: number, totalMeasures: number) {
+  return Math.max(1, Math.min(Math.round(raw * 4) / 4, totalMeasures));
+}
+
+// ─── Time Ruler ───────────────────────────────────────────────────────────────
+
+function TimeRuler({ totalMeasures, bpm }: { totalMeasures: number; bpm: number }) {
+  const spm = secPerMeasure(bpm);
+  const markers: React.ReactNode[] = [];
+
+  for (let m = 1; m <= totalMeasures; m++) {
+    const x = measureToX(m, bpm);
+    const isMajor = (m - 1) % 4 === 0;
+    markers.push(
+      <div
+        key={m}
+        className="absolute top-0 bottom-0 flex flex-col items-start pointer-events-none"
+        style={{ left: x }}
+      >
+        <div className={`w-px ${isMajor ? "h-6 bg-[#2D2D2D]/25" : "h-2.5 bg-[#2D2D2D]/12"}`} />
+        {isMajor && (
+          <span className="font-mono text-[9px] mt-0.5 ml-1 font-bold text-[#2D2D2D]/40 select-none">
+            {m}
+          </span>
+        )}
+      </div>,
+    );
+  }
+
+  // Also mark every second for fine resolution
+  const totalSec = totalMeasures * spm;
+  for (let s = 0; s <= totalSec; s += 1) {
+    const x = s * PIXELS_PER_SECOND;
+    markers.push(
+      <div
+        key={`s-${s}`}
+        className="absolute top-0 w-px h-1 bg-[#2D2D2D]/08 pointer-events-none"
+        style={{ left: x, bottom: 0 }}
+      />,
+    );
+  }
+
+  return <>{markers}</>;
+}
+
+// ─── DAWTimeline ──────────────────────────────────────────────────────────────
 
 interface DAWTimelineProps {
   transport: DAWTransport;
@@ -18,40 +78,6 @@ interface DAWTimelineProps {
   onSelectBlock: (id: string | null) => void;
 }
 
-// ─── Time Ruler ───────────────────────────────────────────────────────────────
-
-function TimeRuler({ totalMeasures }: { totalMeasures: number }) {
-  const START = 1;
-  const span = Math.max(1, totalMeasures - START);
-  const markers: React.ReactNode[] = [];
-
-  for (let j = 0; j <= span; j += 4) {
-    const measure = START + j;
-    const isMajor = measure % 16 === 0;
-    markers.push(
-      <div
-        key={measure}
-        className="absolute top-0 bottom-0 flex flex-col items-start pointer-events-none"
-        style={{ left: `${(j / span) * 100}%` }}
-      >
-        <div
-          className={`w-px ${isMajor ? "h-full bg-[#2D2D2D]/40" : "h-3 bg-[#2D2D2D]/20"}`}
-        />
-        <span
-          className={`font-mono text-[9px] mt-0.5 ml-0.5 ${
-            isMajor ? "text-[#2D2D2D] font-bold opacity-70" : "text-[#2D2D2D] opacity-40"
-          }`}
-        >
-          {measure}
-        </span>
-      </div>
-    );
-  }
-  return <>{markers}</>;
-}
-
-// ─── DAWTimeline ──────────────────────────────────────────────────────────────
-
 export function DAWTimeline({
   transport,
   tracks,
@@ -62,21 +88,30 @@ export function DAWTimeline({
   onDeleteBlock,
   onSelectBlock,
 }: DAWTimelineProps) {
-  const { currentMeasure, totalMeasures } = transport;
-  const START = 1;
-  const span = Math.max(1, totalMeasures - START);
+  const { bpm, currentMeasure, totalMeasures } = transport;
 
-  const timelineRef = useRef<HTMLDivElement>(null);
-  const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
+  const totalWidth = totalMeasures * secPerMeasure(bpm) * PIXELS_PER_SECOND;
+  const playheadX  = measureToX(currentMeasure, bpm);
 
-  // Selection rect for visual shift+click selection
+  const rulerScrollRef   = useRef<HTMLDivElement>(null);
+  const contentScrollRef = useRef<HTMLDivElement>(null);
+  const timelineRef      = useRef<HTMLDivElement>(null);
+  const dragOffsetRef    = useRef<number>(0);
+
+  // Keep ruler and content scroll in sync
+  const syncScroll = (source: "ruler" | "content") => {
+    const ruler   = rulerScrollRef.current;
+    const content = contentScrollRef.current;
+    if (!ruler || !content) return;
+    if (source === "content") ruler.scrollLeft   = content.scrollLeft;
+    else                      content.scrollLeft = ruler.scrollLeft;
+  };
+
   const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null);
-  const [selectionEnd, setSelectionEnd] = useState<{ x: number; y: number } | null>(null);
+  const [selectionEnd,   setSelectionEnd]   = useState<{ x: number; y: number } | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
 
-  const playheadPct = ((currentMeasure - START) / span) * 100;
-
-  // ─── Delete selected block on keydown ──────────────────────────────────────
+  // ─── Delete key ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.key === "Delete" || e.key === "Backspace") && selectedBlockId) {
@@ -87,214 +122,191 @@ export function DAWTimeline({
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedBlockId, onDeleteBlock]);
 
-  // ─── Ruler click → seek ────────────────────────────────────────────────────
+  // ─── Ruler click → seek ──────────────────────────────────────────────────────
   const handleRulerClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const raw = START + (x / rect.width) * span;
-    const snapped = Math.max(START, Math.min(Math.round(raw * 4) / 4, totalMeasures));
-    onSeek(snapped);
+    const x = e.clientX - e.currentTarget.getBoundingClientRect().left;
+    onSeek(snapMeasure(xToMeasure(x, bpm), totalMeasures));
   };
 
-  // ─── Timeline click → seek / deselect ─────────────────────────────────────
+  // ─── Timeline click → seek / deselect ───────────────────────────────────────
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    // Ignore if clicking on a block (blocks stop propagation)
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const raw = START + (x / rect.width) * span;
-    const snapped = Math.max(START, Math.min(Math.round(raw * 4) / 4, totalMeasures));
-    onSeek(snapped);
+    const x = e.clientX - e.currentTarget.getBoundingClientRect().left;
+    onSeek(snapMeasure(xToMeasure(x, bpm), totalMeasures));
     onSelectBlock(null);
   };
 
-  // ─── Selection (shift+drag) ────────────────────────────────────────────────
+  // ─── Shift-drag selection ────────────────────────────────────────────────────
   const handleSelectionMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !e.shiftKey || (e.target as HTMLElement).draggable) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    setSelectionStart({ x, y });
-    setSelectionEnd({ x, y });
+    const pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    setSelectionStart(pt);
+    setSelectionEnd(pt);
     setIsSelecting(true);
   };
 
   const handleSelectionMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isSelecting || !timelineRef.current) return;
     const rect = timelineRef.current.getBoundingClientRect();
-    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    const y = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
-    setSelectionEnd({ x, y });
+    setSelectionEnd({
+      x: Math.max(0, Math.min(e.clientX - rect.left, rect.width)),
+      y: Math.max(0, Math.min(e.clientY - rect.top,  rect.height)),
+    });
   };
 
-  const handleSelectionMouseUp = () => {
-    setIsSelecting(false);
-  };
+  const handleSelectionMouseUp = () => setIsSelecting(false);
 
-  // ─── Block drag-and-drop ───────────────────────────────────────────────────
+  // ─── Block drag-and-drop ─────────────────────────────────────────────────────
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const blockId = e.dataTransfer.getData("text/plain");
-    const rect = e.currentTarget.getBoundingClientRect();
-    let x = e.clientX - rect.left;
-
-    if (dragOffsetRef.current) {
-      x -= dragOffsetRef.current.x;
-    }
-
-    const raw = START + (x / rect.width) * span;
-    const snapped = Math.max(START, Math.min(Math.round(raw * 4) / 4, totalMeasures));
-
-    onUpdateBlock(blockId, { startMeasure: snapped });
-    dragOffsetRef.current = null;
+    const x = e.clientX - e.currentTarget.getBoundingClientRect().left - dragOffsetRef.current;
+    onUpdateBlock(blockId, { startMeasure: snapMeasure(xToMeasure(Math.max(0, x), bpm), totalMeasures) });
   };
 
-  // ─── Compute track index for a block ──────────────────────────────────────
-  const trackIndex = (block: DAWBlock) =>
-    tracks.findIndex((t) => t.id === block.trackId);
-
+  const trackIndex = (block: DAWBlock) => tracks.findIndex((t) => t.id === block.trackId);
   const gridHeight = Math.max(tracks.length, 4) * TRACK_ROW_HEIGHT;
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-[#FDFDFB]">
-      {/* Time ruler */}
+    <div className="flex-1 flex flex-col overflow-hidden daw-grid-bg">
+      {/* ── Time ruler (scrolls with content) ─────────────────────────────────── */}
       <div
-        className="relative shrink-0 bg-[#EFEFEC] border-b-2 border-[#2D2D2D]/20 cursor-pointer select-none"
+        ref={rulerScrollRef}
+        className="overflow-x-auto overflow-y-hidden custom-scrollbar shrink-0"
         style={{ height: HEADER_HEIGHT }}
-        onClick={handleRulerClick}
+        onScroll={() => syncScroll("ruler")}
       >
-        <TimeRuler totalMeasures={totalMeasures} />
-        {/* Playhead marker in ruler */}
         <div
-          className="absolute top-0 bottom-0 w-0.5 bg-[#D32F2F] z-10 pointer-events-none"
-          style={{ left: `${playheadPct}%` }}
+          className="relative bg-[#F0F0EB] border-b border-[#D4D4CE] cursor-pointer select-none"
+          style={{ width: totalWidth, height: HEADER_HEIGHT }}
+          onClick={handleRulerClick}
         >
-          <div className="absolute -top-0 -left-[5px] w-0 h-0 border-l-[5px] border-r-[5px] border-b-[8px] border-l-transparent border-r-transparent border-b-[#D32F2F]" />
+          <TimeRuler totalMeasures={totalMeasures} bpm={bpm} />
+          {/* Playhead tick in ruler */}
+          <div
+            className="absolute top-0 bottom-0 w-px bg-[#D32F2F] z-10 pointer-events-none"
+            style={{ left: playheadX }}
+          >
+            <div className="absolute -top-0 -left-[5px] w-0 h-0 border-l-[5px] border-r-[5px] border-b-[8px] border-l-transparent border-r-transparent border-b-[#D32F2F]" />
+          </div>
         </div>
       </div>
 
-      {/* Scrollable track area */}
-      <div className="flex-1 overflow-auto">
+      {/* ── Scrollable track area ──────────────────────────────────────────────── */}
+      <div
+        ref={contentScrollRef}
+        className="flex-1 overflow-auto custom-scrollbar"
+        onScroll={() => syncScroll("content")}
+      >
         <div
           ref={timelineRef}
           className="relative cursor-crosshair"
-          style={{ height: gridHeight, minWidth: "100%" }}
+          style={{ width: totalWidth, height: gridHeight }}
           onClick={handleTimelineClick}
           onMouseDown={handleSelectionMouseDown}
           onMouseMove={handleSelectionMouseMove}
           onMouseUp={handleSelectionMouseUp}
           onMouseLeave={handleSelectionMouseUp}
-          onDragOver={(e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
-          }}
+          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
           onDrop={handleDrop}
         >
-          {/* ── Vertical grid lines ─────────────────────────────────────────── */}
-          {Array.from({ length: span + 1 }, (_, j) => {
-            const measure = START + j;
-            const isMajor = measure % 16 === 0;
-            const isMinor = measure % 4 === 0;
+          {/* Track row bands */}
+          {Array.from({ length: Math.max(tracks.length, 4) }, (_, i) => (
+            <div
+              key={`hband-${i}`}
+              className="absolute left-0 right-0 border-b border-[#E8E8E3] pointer-events-none"
+              style={{ top: i * TRACK_ROW_HEIGHT, height: TRACK_ROW_HEIGHT, backgroundColor: i % 2 === 0 ? "transparent" : "rgba(0,0,0,0.008)" }}
+            />
+          ))}
+
+          {/* Vertical measure grid lines */}
+          {Array.from({ length: totalMeasures + 1 }, (_, j) => {
+            const m = j + 1;
+            const isMajor = j % 4 === 0;
             return (
               <div
                 key={`vgrid-${j}`}
-                className={`absolute top-0 bottom-0 pointer-events-none ${
-                  isMajor
-                    ? "border-l-2 border-[#2D2D2D]/20"
-                    : isMinor
-                    ? "border-l border-[#2D2D2D]/15"
-                    : "border-l border-[#2D2D2D]/8"
-                }`}
-                style={{ left: `${(j / span) * 100}%` }}
+                className="absolute top-0 bottom-0 pointer-events-none"
+                style={{
+                  left: measureToX(m, bpm),
+                  borderLeft: isMajor ? "1px solid rgba(45,45,45,0.15)" : "1px solid rgba(45,45,45,0.06)",
+                }}
               />
             );
           })}
 
-          {/* ── Horizontal track row separators ────────────────────────────── */}
-          {Array.from({ length: Math.max(tracks.length, 4) }, (_, i) => (
-            <div
-              key={`hgrid-${i}`}
-              className="absolute left-0 right-0 border-t border-[#2D2D2D]/10 pointer-events-none"
-              style={{ top: i * TRACK_ROW_HEIGHT }}
-            />
-          ))}
-
-          {/* ── Playhead line ───────────────────────────────────────────────── */}
+          {/* Playhead line */}
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-[#D32F2F] z-50 pointer-events-none"
-            style={{ left: `${playheadPct}%` }}
+            className="absolute top-0 bottom-0 w-px bg-[#D32F2F] z-50 pointer-events-none"
+            style={{ left: playheadX }}
           />
 
-          {/* ── Selection rectangle ─────────────────────────────────────────── */}
+          {/* Selection rectangle */}
           {selectionStart && selectionEnd && (
             <div
-              className="absolute bg-[#2D2D2D]/10 border border-[#2D2D2D]/30 z-20 pointer-events-none"
+              className="absolute bg-[#7DBF7D]/10 border border-[#7DBF7D]/40 z-20 pointer-events-none"
               style={{
-                left: Math.min(selectionStart.x, selectionEnd.x),
-                top: Math.min(selectionStart.y, selectionEnd.y),
-                width: Math.abs(selectionEnd.x - selectionStart.x),
+                left:   Math.min(selectionStart.x, selectionEnd.x),
+                top:    Math.min(selectionStart.y, selectionEnd.y),
+                width:  Math.abs(selectionEnd.x - selectionStart.x),
                 height: Math.abs(selectionEnd.y - selectionStart.y),
               }}
             />
           )}
 
-          {/* ── Blocks ──────────────────────────────────────────────────────── */}
+          {/* Blocks */}
           {blocks.map((block) => {
             const tIdx = trackIndex(block);
             if (tIdx === -1) return null;
-            const track = tracks[tIdx];
-
-            const leftPct = ((block.startMeasure - START) / span) * 100;
-            const widthPct = (block.durationMeasures / span) * 100;
-            const topPx = tIdx * TRACK_ROW_HEIGHT + 4;
-            const heightPx = TRACK_ROW_HEIGHT - 8;
+            const track      = tracks[tIdx];
             const blockColor = block.color ?? track.color;
             const isSelected = selectedBlockId === block.id;
+
+            const leftPx   = measureToX(block.startMeasure, bpm);
+            const widthPx  = block.durationMeasures * secPerMeasure(bpm) * PIXELS_PER_SECOND;
+            const topPx    = tIdx * TRACK_ROW_HEIGHT + 5;
+            const heightPx = TRACK_ROW_HEIGHT - 10;
 
             return (
               <div
                 key={block.id}
-                className={`absolute rounded-xl overflow-hidden cursor-move z-10 transition-shadow border-2 ${
-                  isSelected
-                    ? "border-[#2D2D2D] shadow-[2px_2px_0px_0px_rgba(0,0,0,0.15)]"
-                    : "border-[#2D2D2D]/30 hover:border-[#2D2D2D]/60"
-                }`}
+                className={`absolute rounded-md overflow-hidden cursor-move z-10 transition-shadow ${isSelected ? "ring-1 ring-[#2D2D2D]/50" : ""}`}
                 style={{
-                  left: `${leftPct}%`,
-                  width: `${widthPct}%`,
-                  top: topPx,
+                  left:   leftPx,
+                  width:  Math.max(8, widthPx),
+                  top:    topPx,
                   height: heightPx,
                   backgroundColor: blockColor,
-                  minWidth: 8,
+                  border: `1.5px solid rgba(45,45,45,${isSelected ? 0.6 : 0.35})`,
+                  boxShadow: isSelected ? "0 2px 8px rgba(0,0,0,0.15)" : "0 1px 3px rgba(0,0,0,0.08)",
                 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectBlock(block.id);
-                }}
+                onClick={(e) => { e.stopPropagation(); onSelectBlock(block.id); }}
                 draggable
                 onDragStart={(e) => {
                   e.dataTransfer.setData("text/plain", block.id);
                   e.dataTransfer.effectAllowed = "move";
-                  const blockRect = e.currentTarget.getBoundingClientRect();
-                  dragOffsetRef.current = {
-                    x: e.clientX - blockRect.left,
-                    y: e.clientY - blockRect.top,
-                  };
+                  dragOffsetRef.current = e.clientX - e.currentTarget.getBoundingClientRect().left;
                 }}
                 onDragEnd={(e) => e.preventDefault()}
               >
-                <div className="p-1 h-full flex flex-col justify-center overflow-hidden">
+                <div className="px-2 py-1.5 h-full flex flex-col justify-between overflow-hidden">
+                  <span className="font-mono text-[10px] font-bold text-[#1a1a1a]/80 truncate leading-none select-none">
+                    {block.name?.toUpperCase() ?? ""}
+                  </span>
                   {track.audioBlob ? (
                     <Waveform
                       audioBlob={track.audioBlob}
-                      width={Math.max(40, Math.floor((block.durationMeasures / totalMeasures) * 800))}
-                      height={Math.max(20, heightPx - 16)}
-                      color="rgba(255,255,255,0.8)"
+                      width={Math.max(40, Math.floor(widthPx))}
+                      height={Math.max(18, heightPx - 26)}
+                      color="rgba(0,0,0,0.35)"
                       className="w-full"
                     />
                   ) : (
-                    <span className="font-mono text-[10px] text-white/80 truncate px-1 font-bold drop-shadow-sm">
-                      {block.name}
-                    </span>
+                    <div className="flex flex-col gap-[2.5px] py-0.5">
+                      {[0.7, 0.5, 0.85, 0.6, 0.4].map((w, i) => (
+                        <div key={i} className="rounded-full" style={{ height: 2, width: `${w * 100}%`, backgroundColor: "rgba(0,0,0,0.3)" }} />
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>

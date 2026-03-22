@@ -102,7 +102,10 @@ export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineR
 
       if (prev !== fingerprint) {
         loadedBlobsRef.current.set(track.id, fingerprint);
-        toneEngine.loadStemFromBlob(track.id, track.name, track.audioBlob).catch(() => {
+        const loopConfig = track.loop
+          ? { loop: true, durationSeconds: track.loopDurationSec }
+          : undefined;
+        toneEngine.loadStemFromBlob(track.id, track.name, track.audioBlob, loopConfig).catch(() => {
           console.warn(`[useDAWEngine] Failed to load stem: ${track.name}`);
         });
       }
@@ -126,10 +129,14 @@ export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineR
     await toneEngine.init();
     toneEngine.setBPM(stateRef.current.transport.bpm);
 
-    // Start all loaded stems synced to transport
+    // Start all loaded stems synced to the Transport at their block's position.
+    // secondsPerMeasure = (60 / bpm) * 4  (4 beats per measure in 4/4)
+    const secondsPerMeasure = (60 / stateRef.current.transport.bpm) * 4;
     stateRef.current.tracks.forEach((track) => {
       if (track.audioBlob && !track.muted) {
-        toneEngine.playStem(track.id);
+        const block = stateRef.current.blocks.find((b) => b.trackId === track.id);
+        const transportStartSec = block ? (block.startMeasure - 1) * secondsPerMeasure : 0;
+        toneEngine.playStem(track.id, transportStartSec);
       }
     });
 

@@ -1,13 +1,18 @@
 @import "tailwindcss";
 
 body {
-  background-color: #f5f5f2;
-  background-image: radial-gradient(rgba(45, 45, 45, 0.18) 0.5px, transparent 0.5px);
-  background-size: 20px 20px;
+  background-color: #F8F8F4;
   font-family: "Be Vietnam Pro", sans-serif;
   color: #2d2d2d;
   overflow: hidden;
   height: 100vh;
+}
+
+/* DAW timeline grid background */
+.daw-grid-bg {
+  background-color: #F8F8F4;
+  background-image: radial-gradient(rgba(45, 45, 45, 0.1) 0.75px, transparent 0.75px);
+  background-size: 16px 16px;
 }
 
 /* Hard shadows */
@@ -33,15 +38,18 @@ body {
 
 /* Custom scrollbar */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
 .custom-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #2d2d2d;
+  background: rgba(45, 45, 45, 0.15);
   border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(45, 45, 45, 0.3);
 }
 
 /* Fader thumb gradient */
@@ -56,9 +64,18 @@ body {
 
 /* Recording pulse ring */
 @keyframes record-pulse {
-  0%, 100% { box-shadow: 4px 4px 0px 0px rgba(45,45,45,1), 0 0 0 0 rgba(250,113,80,0.6); }
-  50%       { box-shadow: 4px 4px 0px 0px rgba(45,45,45,1), 0 0 0 8px rgba(250,113,80,0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(224,90,58,0.5); }
+  50%       { box-shadow: 0 0 0 6px rgba(224,90,58,0); }
 }
 .recording-pulse {
   animation: record-pulse 1.2s ease-in-out infinite;
+}
+
+/* Clip block hover lift */
+.clip-block {
+  transition: box-shadow 120ms ease, transform 120ms ease;
+}
+.clip-block:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12) !important;
+  transform: translateY(-0.5px);
 }

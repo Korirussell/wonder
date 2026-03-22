@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useDAWContext } from "@/lib/DAWContext";
 import { useDAWEngine } from "@/lib/useDAWEngine";
+import { useAudioAnalysis } from "@/lib/useAudioAnalysis";
 import { DAWTransportBar } from "./DAWTransportBar";
 import { DAWTrackList } from "./DAWTrackList";
 import { DAWTimeline } from "./DAWTimeline";
@@ -10,15 +11,16 @@ import { DrumRack } from "./DrumRack";
 import ToneWaveformViz from "@/components/ToneWaveformViz";
 import type { DAWTrack, DrumPattern } from "@/types";
 
+// DAW clip colors — sage greens, yellows, muted tones matching the mockup
 const TRACK_COLORS = [
-  "#C1E1C1",
-  "#E9D5FF",
-  "#FEF08A",
-  "#FCA5A5",
-  "#BAE6FD",
-  "#DDD6FE",
-  "#BBF7D0",
-  "#FED7AA",
+  "#A8D5A2", // sage green
+  "#F0E08A", // muted yellow
+  "#9ECFCC", // muted teal
+  "#F0C080", // warm amber
+  "#B8D4F0", // muted blue
+  "#D4A8D0", // muted lavender
+  "#BCE8B0", // light green
+  "#F0B8A8", // muted coral
 ];
 
 export default function DAWView() {
@@ -28,6 +30,7 @@ export default function DAWView() {
     dispatch: dispatch as React.Dispatch<{ type: string; payload?: unknown }>,
   });
   const [drumsOpen, setDrumsOpen] = useState(false);
+  const { analysis, analyzing, analyze } = useAudioAnalysis();
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
@@ -45,6 +48,7 @@ export default function DAWView() {
   const handleUploadAudio = async (trackId: string, file: File) => {
     const blob = new Blob([file], { type: file.type });
     dispatch({ type: "LOAD_AUDIO", payload: { trackId, blob } });
+    analyze(file);
     // Auto-create a block at measure 1 if none exists for this track
     if (!state.blocks.find((b) => b.trackId === trackId)) {
       // Calculate actual duration in measures
@@ -74,6 +78,34 @@ export default function DAWView() {
 
   // ─── Transport Bar (shared between empty and populated state) ───────────────
 
+  const analysisBadge = (
+    <div className="flex items-center gap-2 px-3 py-1.5 border-t-2 border-[#1A1A1A] bg-[#FDFDFB]">
+      {analyzing ? (
+        <span className="font-mono text-[9px] uppercase tracking-widest text-[#1A1A1A]/40 animate-pulse">
+          ◌ Analyzing…
+        </span>
+      ) : analysis ? (
+        <>
+          <div className="border-2 border-[#1A1A1A] bg-[#FDFDFB] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] px-2 py-0.5 font-mono text-[10px] font-bold">
+            {analysis.bpm} BPM
+          </div>
+          <div className="border-2 border-[#1A1A1A] bg-[#A8D5A2] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] px-2 py-0.5 font-mono text-[10px] font-bold">
+            {analysis.key}
+          </div>
+          {analysis.error && (
+            <span className="font-mono text-[9px] text-[#1A1A1A]/30 ml-1">
+              (estimated)
+            </span>
+          )}
+        </>
+      ) : (
+        <span className="font-mono text-[9px] uppercase tracking-widest text-[#1A1A1A]/20">
+          Record a loop to detect key + BPM
+        </span>
+      )}
+    </div>
+  );
+
   const transportBar = (
     <DAWTransportBar
       transport={state.transport}
@@ -99,28 +131,29 @@ export default function DAWView() {
 
   if (state.tracks.length === 0) {
     return (
-      <div className="flex-1 flex flex-col bg-[#FDFDFB]">
-        {transportBar}
-        {drumRack}
+      <div className="flex-1 flex flex-col bg-[#F8F8F4]">
         <div className="flex-1 flex items-center justify-center">
-          <div className="border-2 border-dashed border-[#2D2D2D]/20 rounded-2xl p-14 text-center max-w-sm">
-            <div className="w-12 h-12 rounded-2xl bg-[#2D2D2D] flex items-center justify-center mx-auto mb-4">
-              <span className="text-white text-lg">+</span>
+          <div className="border border-dashed border-[#2D2D2D]/20 rounded-2xl p-14 text-center max-w-sm bg-white/60">
+            <div className="w-11 h-11 rounded-xl bg-[#A8D5A2] flex items-center justify-center mx-auto mb-4 border border-[#2D2D2D]/10">
+              <span className="text-[#1a1a1a] text-lg font-bold">+</span>
             </div>
-            <p className="font-headline text-sm font-extrabold text-[#2D2D2D] uppercase tracking-widest">
+            <p className="font-mono text-[11px] font-bold text-[#2D2D2D]/70 uppercase tracking-widest">
               No tracks yet
             </p>
-            <p className="font-body text-[11px] text-[#2D2D2D]/40 mt-1">
-              Add a track to start building your session
+            <p className="font-mono text-[10px] text-[#2D2D2D]/35 mt-1.5">
+              Add a track to start your session
             </p>
             <button
               onClick={handleAddTrack}
-              className="mt-5 border-2 border-[#2D2D2D] rounded-xl px-6 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest interactive-push bg-white hard-shadow"
+              className="mt-5 border border-[#2D2D2D]/30 rounded-lg px-6 py-2 font-mono text-[10px] font-bold uppercase tracking-widest bg-white hover:bg-[#F0F0EB] hover:border-[#2D2D2D]/50 transition-colors"
             >
               + Add Track
             </button>
           </div>
         </div>
+        {drumRack}
+        {analysisBadge}
+        {transportBar}
       </div>
     );
   }
@@ -128,19 +161,17 @@ export default function DAWView() {
   // ─── Full DAW layout ──────────────────────────────────────────────────────────
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-[#FDFDFB]">
-      {transportBar}
-      {drumRack}
+    <div className="flex-1 flex flex-col overflow-hidden bg-[#F8F8F4]">
       {/* Live waveform visualizer — visible when playing */}
       {state.transport.isPlaying && (
-        <div className="h-10 bg-[#1A1A1A] border-b border-[#2D2D2D] flex items-center px-4 shrink-0">
-          <span className="font-mono text-[8px] font-bold uppercase tracking-widest text-white/25 mr-3 shrink-0">Live</span>
+        <div className="h-8 bg-[#1C1C1C] border-b border-white/5 flex items-center px-4 shrink-0">
+          <span className="font-mono text-[8px] font-bold uppercase tracking-widest text-white/20 mr-3 shrink-0">● LIVE</span>
           <ToneWaveformViz
             width={800}
-            height={32}
+            height={24}
             mode="waveform"
-            color="#4CAF50"
-            className="flex-1 opacity-80"
+            color="#A8D5A2"
+            className="flex-1 opacity-70"
           />
         </div>
       )}
@@ -172,6 +203,9 @@ export default function DAWView() {
           }
         />
       </div>
+      {drumRack}
+      {analysisBadge}
+      {transportBar}
     </div>
   );
 }

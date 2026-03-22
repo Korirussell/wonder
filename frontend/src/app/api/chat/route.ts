@@ -20,8 +20,18 @@ lo-fi: kick 1+7, snare 5+13, hi-hats every other step
 ## Workflow
 1. Always call setBPM first
 2. Call setDrumPattern to lay down rhythm (instant, no API needed)
-3. Call generateAndPlaceAudio for melodic/bass layers (uses ElevenLabs)
-4. Confirm in 1 sentence
+3. Call generateLoop for backing tracks / chords / bass lines / pads (loops to grid)
+4. Call generateAndPlaceAudio for one-shot FX, single hits, stabs (does NOT loop)
+5. Confirm in 1 sentence
+
+## Tool Choice Guide
+- "piano progression", "chord loop", "bass loop", "pad loop", "melody loop" → generateLoop
+- "808 hit", "snare crack", "riser", "one-shot", "stab", "FX" → generateAndPlaceAudio
+
+## generateLoop Tips
+- description must include: instrument, feel, genre. The frontend injects BPM + key automatically.
+- bars: 4 for short motifs, 8 for longer phrases. Never exceed 8 (22s ElevenLabs cap).
+- isLoop: true (default). Set false only for non-repeating intros/outros.
 
 ## Sound Generation Tips
 - Be specific: "deep punchy 808 sub bass hit with long tail decay" not just "bass"
@@ -100,6 +110,21 @@ export async function POST(req: NextRequest) {
           startMeasure:     z.number(),
           durationMeasures: z.number().optional(),
           color:            z.string().optional(),
+        })),
+      }),
+
+      generateLoop: tool({
+        description:
+          "Generate a BPM-synced looping backing track (piano, chords, bass, pads, melody). " +
+          "The frontend calculates exact duration from bars + live BPM and injects BPM + key into the prompt. " +
+          "Use this for anything that repeats on the grid.",
+        inputSchema: zodSchema(z.object({
+          description:  z.string().describe("Instrument + feel + genre. Do NOT include BPM or key — the frontend injects those."),
+          bars:         z.number().int().min(1).max(8).default(4).describe("Number of bars (default 4, max 8 for 22s API cap)"),
+          trackName:    z.string().describe("Short display name for the DAW track"),
+          startMeasure: z.number().int().min(1).default(1).describe("Where to place the clip on the arrangement timeline"),
+          isLoop:       z.boolean().default(true).describe("Whether to loop the clip (default true)"),
+          color:        z.string().optional(),
         })),
       }),
 

@@ -411,6 +411,28 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
     },
   },
   {
+    name: "loadSampleIntoPad",
+    description: "Generate a one-shot drum sound with ElevenLabs and load it directly into a drum rack pad slot (kick, snare, hihat, or openHat). The pad will play the sound immediately when triggered and also use it in the step sequencer. Always call this before setDrumPattern so the slots have real sounds.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        slot: {
+          type: SchemaType.STRING,
+          description: "Which drum pad to load into: 'kick' | 'snare' | 'hihat' | 'openHat'",
+        },
+        description: {
+          type: SchemaType.STRING,
+          description: "Sound to generate. Be specific: 'deep punchy 808 kick with sub tail', 'crisp snappy snare with crack', 'tight closed hi-hat', 'bright open hi-hat wash'",
+        },
+        durationSeconds: {
+          type: SchemaType.NUMBER,
+          description: "Sample length in seconds. Kick: 1.0–1.5. Snare: 0.5–1.0. Hi-hats: 0.3–0.8.",
+        },
+      },
+      required: ["slot", "description"],
+    },
+  },
+  {
     name: "setDrumPattern",
     description: "Fill the drum rack step sequencer with a rhythmic pattern. Each array contains 16 booleans representing 16 steps in one bar. true = hit on that step, false = silent. Call setBPM first, then this tool. The drum rack starts playing immediately.",
     parameters: {
