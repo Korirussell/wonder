@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "server"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "mcp[cli]>=1.6.0",
+    "pymongo>=4.6",
+    "python-dotenv>=1.0",
+    "soundsplit",
+    "soundgen",
+]
+
+[tool.uv.sources]
+soundsplit = { workspace = true }
+soundgen   = { workspace = true }
+
+[project.scripts]
+server-rest = "server.rest:main"
+server-mcp  = "server.mcp:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server"]
