@@ -24,6 +24,9 @@ class SampleRecord(BaseModel):
     file_name: str
     file_extension: str = ".wav"
     source: str = "local"
+    provider: str | None = None
+    provider_asset_id: str | None = None
+    generation_prompt: str | None = None
     category: str | None = None
     sub_category: str | None = None
     tags: list[str] = Field(default_factory=list)
