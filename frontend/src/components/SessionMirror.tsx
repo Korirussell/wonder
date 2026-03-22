@@ -6,6 +6,7 @@ import { DndContext, closestCenter, DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import TrackColumn from "./TrackColumn";
 import TempoModal from "./TempoModal";
+import ScaleModal from "./ScaleModal";
 import { Track, SessionState } from "@/types";
 
 const MOCK_TRACKS: Track[] = [
@@ -80,6 +81,7 @@ export default function SessionMirror() {
   };
 
   const [showTempoModal, setShowTempoModal] = useState(false);
+  const [showScaleModal, setShowScaleModal] = useState(false);
   const [abletonConnected, setAbletonConnected] = useState(false);
 
   // Poll Ableton state every 2 seconds and sync to UI
@@ -124,14 +126,17 @@ export default function SessionMirror() {
               {session.bpm.toFixed(2)}
             </span>
           </button>
-          <div className="bg-white border-2 border-[#2D2D2D] px-4 py-2 rounded-xl hard-shadow-sm flex flex-col">
+          <button
+            onClick={() => setShowScaleModal(true)}
+            className="bg-white border-2 border-[#2D2D2D] px-4 py-2 rounded-xl hard-shadow-sm flex flex-col cursor-pointer hover:bg-stone-50 transition-colors interactive-push"
+          >
             <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-stone-400 mb-0.5">
-              Key
+              Scale
             </span>
             <span className="font-mono text-xl font-bold leading-none uppercase">
               {session.key}
             </span>
-          </div>
+          </button>
         </div>
 
         {/* Ableton connection pill */}
@@ -205,6 +210,13 @@ export default function SessionMirror() {
           initialBpm={session.bpm}
           onConfirm={(newBpm) => setSession((s) => ({ ...s, bpm: newBpm }))}
           onClose={() => setShowTempoModal(false)}
+        />
+      )}
+      {showScaleModal && (
+        <ScaleModal
+          initialKey={session.key}
+          onConfirm={(key) => setSession((s) => ({ ...s, key }))}
+          onClose={() => setShowScaleModal(false)}
         />
       )}
     </section>
