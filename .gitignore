@@ -7,6 +7,9 @@ __pycache__/
 # Local LanceDB / tagging index
 data/
 
+# Full sample library folder (large audio); use dev_samples/ for small tracked subsets
+SAMPLES/
+
 .env
 .env.*
 !.env.example
