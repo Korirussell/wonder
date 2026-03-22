@@ -54,6 +54,7 @@ export function updateStateAfterToolCall(
   result: unknown
 ): SessionState {
   const newState = { ...state, last_updated: Date.now() };
+  const toolResult = (result ?? {}) as Record<string, unknown>;
 
   switch (toolName) {
     case "set_tempo":
@@ -66,9 +67,15 @@ export function updateStateAfterToolCall(
 
     case "create_midi_track":
     case "create_audio_track":
+      const createdTrackIndex = typeof toolResult.index === "number"
+        ? toolResult.index
+        : (params.index as number);
+      const createdTrackName = typeof toolResult.name === "string"
+        ? toolResult.name
+        : `Track ${createdTrackIndex}`;
       newState.tracks.push({
-        index: params.index as number,
-        name: `Track ${params.index}`,
+        index: createdTrackIndex,
+        name: createdTrackName,
         type: toolName === "create_midi_track" ? "midi" : "audio",
         instrument: null,
         instrument_loaded: false,
@@ -86,11 +93,12 @@ export function updateStateAfterToolCall(
       break;
 
     case "load_instrument_or_effect":
+    case "load_browser_item":
       const trackToLoadInstrument = newState.tracks.find(
         (t) => t.index === params.track_index
       );
       if (trackToLoadInstrument) {
-        trackToLoadInstrument.instrument = (params.uri as string) || "Unknown";
+        trackToLoadInstrument.instrument = (params.uri as string) || (params.item_uri as string) || "Unknown";
         trackToLoadInstrument.instrument_loaded = true;
       }
       break;
@@ -100,7 +108,7 @@ export function updateStateAfterToolCall(
         (t) => t.index === params.track_index
       );
       if (trackToLoadDrumKit) {
-        trackToLoadDrumKit.instrument = (params.kit_path as string) || "Drum Kit";
+        trackToLoadDrumKit.instrument = (toolResult.kit_name as string) || (params.kit_path as string) || "Drum Kit";
         trackToLoadDrumKit.instrument_loaded = true;
       }
       break;

@@ -275,18 +275,7 @@ echo "GEMINI_API_KEY=your_key_here" > .env.local
 3. Confirm "AbletonMCP connected" in the Ableton status bar
 
 ### Claude Desktop Setup
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
-```json
-{
-  "mcpServers": {
-    "ableton": {
-      "command": "python3",
-      "args": ["/path/to/wonder/ableton-mcp/MCP_Server/server.py"]
-    }
-  }
-}
-```
-Restart Claude Desktop.
+This flow is now obsolete for Ableton control inside Wonder. The app sends commands straight to the Ableton socket bridge on `localhost:9877`, so no separate Ableton MCP server entry is required in Claude Desktop.
 
 ### Run the Frontend
 ```bash

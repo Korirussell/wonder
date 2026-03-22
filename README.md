@@ -25,15 +25,13 @@ wonder/                           ← this repo
 ├── ableton_test.py               ← test suite (run this to verify your setup works)
 ├── test_results.md               ← last test run output
 ├── WONDER_BRIEF.md               ← product overview doc
-└── ableton-mcp/                  ← Ableton bridge (included in this repo)
+└── kori-mcp/                     ← Ableton bridge assets (included in this repo)
     ├── AbletonMCP_Remote_Script/
     │   └── __init__.py           ← Python script that runs INSIDE Ableton
-    ├── MCP_Server/
-    │   └── server.py             ← FastMCP server that wraps commands as LLM tools
     └── pyproject.toml
 ```
 
-> `ableton-mcp` is a fork of [jpoindexter/ableton-mcp](https://github.com/jpoindexter/ableton-mcp), upgraded for Wonder with Live 12 bug fixes and new commands. **Do not use the original repo** — use the one bundled here.
+> `kori-mcp` is a fork of [jpoindexter/ableton-mcp](https://github.com/jpoindexter/ableton-mcp), upgraded for Wonder with Live 12 bug fixes and new commands. The frontend now talks directly to Ableton over TCP, so the legacy Ableton FastMCP wrapper is no longer part of the setup.
 
 ---
 
@@ -53,7 +51,7 @@ wonder/                           ← this repo
 ```bash
 git clone <wonder-repo-url>
 cd wonder
-pip install -e ableton-mcp
+pip install -e kori-mcp
 ```
 
 Verify:
@@ -70,7 +68,7 @@ Copy the Remote Script folder into Ableton's User Library:
 
 ```bash
 # Run from the root of the wonder repo
-cp -r ableton-mcp/AbletonMCP_Remote_Script \
+cp -r kori-mcp/AbletonMCP_Remote_Script \
   ~/Music/Ableton/User\ Library/Remote\ Scripts/AbletonMCP
 ```
 
@@ -86,24 +84,9 @@ Ableton will now open a TCP socket on `localhost:9877` at startup. You'll see a 
 
 ---
 
-### Step 3 — Configure Claude Desktop (for LLM-driven sessions)
+### Step 3 — Start Wonder
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "ableton": {
-      "command": "python3",
-      "args": ["/Users/yourname/path/to/wonder/ableton-mcp/MCP_Server/server.py"]
-    }
-  }
-}
-```
-
-Replace the path with the absolute path to the `wonder` repo on your machine. You can get it by running `pwd` from inside the repo. Then restart Claude Desktop. The Ableton tools should appear in Claude's tool list.
-
-> **Important:** Use `python3`, not `python`. On most Macs, `python` points to Python 2.7 and the server will crash on startup.
+Run the frontend and keep Ableton open with the `AbletonMCP` control surface enabled. Wonder sends commands straight to Ableton on `localhost:9877`; no separate Ableton MCP server process is required.
 
 ---
 

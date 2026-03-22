@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties, HTMLAttributes, Ref } from "react";
 import { Track } from "@/types";
 import DevicePill from "./DevicePill";
 import { useSortable } from "@dnd-kit/sortable";
@@ -9,29 +10,30 @@ interface TrackColumnProps {
   track: Track;
   index: number;
   onUpdate: (id: number, patch: Partial<Track>) => void;
+  sortable?: boolean;
 }
 
-export default function TrackColumn({ track, index, onUpdate }: TrackColumnProps) {
-  const faderTop = `${Math.round((1 - track.volume) * 70)}%`;
+interface TrackColumnShellProps extends TrackColumnProps {
+  articleRef?: Ref<HTMLElement>;
+  articleProps?: HTMLAttributes<HTMLElement>;
+  headerProps?: HTMLAttributes<HTMLDivElement>;
+  style?: CSSProperties;
+}
 
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: track.id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
+function TrackColumnShell({ track, index, onUpdate, articleRef, articleProps, headerProps, style }: TrackColumnShellProps) {
+  const faderTop = `${Math.round((1 - track.volume) * 70)}%`;
 
   return (
     <article
-      ref={setNodeRef}
+      ref={articleRef}
       style={style}
-      {...attributes}
+      {...articleProps}
       className="flex-1 min-w-[200px] self-stretch bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow flex flex-col overflow-hidden"
     >
       {/* Header — drag handle */}
       <div
-        {...listeners}
-        className="p-4 border-b-2 border-[#2D2D2D] bg-stone-50 flex justify-between items-center cursor-grab active:cursor-grabbing"
+        {...headerProps}
+        className={`p-4 border-b-2 border-[#2D2D2D] bg-stone-50 flex justify-between items-center ${headerProps ? "cursor-grab active:cursor-grabbing" : ""}`}
       >
         <div>
           <span className="font-mono text-[10px] font-bold text-stone-400 block">
@@ -112,4 +114,35 @@ export default function TrackColumn({ track, index, onUpdate }: TrackColumnProps
       </div>
     </article>
   );
+}
+
+function SortableTrackColumn(props: TrackColumnProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.track.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <TrackColumnShell
+      {...props}
+      articleRef={setNodeRef}
+      articleProps={attributes}
+      headerProps={listeners}
+      style={style}
+    />
+  );
+}
+
+function StaticTrackColumn(props: TrackColumnProps) {
+  return <TrackColumnShell {...props} />;
+}
+
+export default function TrackColumn({ sortable = true, ...props }: TrackColumnProps) {
+  if (!sortable) {
+    return <StaticTrackColumn {...props} sortable={false} />;
+  }
+
+  return <SortableTrackColumn {...props} sortable />;
 }
