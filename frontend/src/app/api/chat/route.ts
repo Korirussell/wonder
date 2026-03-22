@@ -11,7 +11,8 @@ import {
 } from "@/lib/sessionState";
 import { validateBeforeExecution } from "@/lib/musicValidator";
 
-const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
+
+const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
 interface NotesSummary {
   note_count: number;
@@ -40,7 +41,7 @@ interface RhythmContext {
 }
 
 async function callPythonApi(endpoint: string, args: Record<string, unknown>): Promise<unknown> {
-  const res = await fetch(`${PYTHON_API_URL}${endpoint}`, {
+  const res = await fetch(`${BACKEND_URL}${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(args),
@@ -262,7 +263,7 @@ async function runGeminiLoop(
     tools: [{ functionDeclarations: WONDER_TOOL_DECLARATIONS }],
     toolConfig: { functionCallingConfig: { mode: FunctionCallingMode.AUTO } },
     generationConfig: {
-      // @ts-ignore
+      // @ts-expect-error Gemini SDK exposes thinkingConfig before typings catch up.
       thinkingConfig: { thinkingBudget: 0 },
     },
   });
@@ -323,12 +324,14 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { messages, audioData, mimeType, midiContext, rhythmContext } = await req.json() as {
+    const { messages, audioData, mimeType, midiContext, rhythmContext, session_id, user_id } = await req.json() as {
       messages: Array<{ role: "user" | "assistant"; content: string }>;
       audioData?: string;
       mimeType?: string;
       midiContext?: MidiContext;
       rhythmContext?: RhythmContext;
+      session_id?: string;
+      user_id?: string;
     };
 
     let systemPrompt = WONDER_SYSTEM_PROMPT;
@@ -361,6 +364,19 @@ export async function POST(req: NextRequest) {
       const firstUserIdx = rawHistory.findIndex((m) => m.role === "user");
       const history = firstUserIdx >= 0 ? rawHistory.slice(firstUserIdx) : [];
       finalText = await runGeminiLoop(genAI, history, lastMessage.content, systemPrompt, audioData, mimeType);
+    }
+
+    if (session_id && user_id) {
+      fetch(`${BACKEND_URL}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id,
+          user_id,
+          messages,
+          response: finalText,
+        }),
+      }).catch(() => {});
     }
 
     return NextResponse.json({ content: finalText });

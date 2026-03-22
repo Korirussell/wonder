@@ -3,16 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Paperclip, Mic, Send, StopCircle, Music2, X } from "lucide-react";
 import { ChatMessage } from "@/types";
-
-const INITIAL_MESSAGES: ChatMessage[] = [
-  {
-    id: "1",
-    role: "assistant",
-    content:
-      "Hey! I'm Wonder — your AI music copilot. Tell me what you want to make, or hum a melody and I'll build the session in Ableton. What are we making today?",
-    timestamp: new Date(),
-  },
-];
+import { DEFAULT_CHAT_GREETING, useChat } from "@/lib/ChatContext";
+import { useAuth } from "@/lib/AuthContext";
 
 interface TapNote {
   startMs: number;
@@ -92,10 +84,19 @@ function analyzeTapNotes(notes: TapNote[]): PendingRhythm | null {
 }
 
 export default function CopilotChat() {
-  const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const { user } = useAuth();
+  const {
+    activeChatId,
+    activeMessages,
+    appendMessage,
+    createChat,
+    getMessages,
+    setLoading,
+    updateChatPreview,
+  } = useChat();
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -109,7 +110,7 @@ export default function CopilotChat() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [activeMessages, isLoading]);
 
   // Auto-grow textarea
   useEffect(() => {
@@ -121,6 +122,8 @@ export default function CopilotChat() {
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
+    const chatId = activeChatId ?? await createChat();
+    const currentMessages = getMessages(chatId);
 
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -129,9 +132,11 @@ export default function CopilotChat() {
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    appendMessage(chatId, userMsg);
+    updateChatPreview(chatId, userMsg.content);
     setInput("");
     setIsLoading(true);
+    setLoading(chatId, true);
 
     const rhythmContext = pendingRhythm
       ? {
@@ -150,38 +155,37 @@ export default function CopilotChat() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [...messages, userMsg].map((m) => ({
+          messages: [...currentMessages, userMsg].map((m) => ({
             role: m.role,
             content: m.content,
           })),
+          session_id: chatId,
+          user_id: user?.id,
           rhythmContext,
         }),
       });
 
       const data = await res.json();
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: data.content,
-          timestamp: new Date(),
-        },
-      ]);
+      appendMessage(chatId, {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: data.content,
+        timestamp: new Date(),
+      });
+      updateChatPreview(chatId, data.content);
       setPendingRhythm(null);
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: "Connection error — make sure the Wonder backend is running.",
-          timestamp: new Date(),
-        },
-      ]);
+      appendMessage(chatId, {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: "Connection error — make sure the Wonder backend is running.",
+        timestamp: new Date(),
+      });
+      updateChatPreview(chatId, "Connection error — make sure the Wonder backend is running.");
     } finally {
       setIsLoading(false);
+      setLoading(chatId, false);
     }
   };
 
@@ -308,15 +312,14 @@ export default function CopilotChat() {
       setIsRecording(true);
     } catch (error) {
       console.error("Error accessing microphone:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: "Could not access microphone. Please check your browser permissions.",
-          timestamp: new Date(),
-        },
-      ]);
+      const chatId = activeChatId ?? await createChat();
+      appendMessage(chatId, {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: "Could not access microphone. Please check your browser permissions.",
+        timestamp: new Date(),
+      });
+      updateChatPreview(chatId, "Could not access microphone. Please check your browser permissions.");
     }
   };
 
@@ -328,6 +331,8 @@ export default function CopilotChat() {
   };
 
   const sendAudioMessage = async (audioBlob: Blob) => {
+    const chatId = activeChatId ?? await createChat();
+    const currentMessages = getMessages(chatId);
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
@@ -335,8 +340,10 @@ export default function CopilotChat() {
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    appendMessage(chatId, userMsg);
+    updateChatPreview(chatId, userMsg.content);
     setIsLoading(true);
+    setLoading(chatId, true);
 
     try {
       // Convert audio blob to base64
@@ -353,10 +360,12 @@ export default function CopilotChat() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [...messages, userMsg].map((m) => ({
+          messages: [...currentMessages, userMsg].map((m) => ({
             role: m.role,
             content: m.content,
           })),
+          session_id: chatId,
+          user_id: user?.id,
           audioData: base64Audio,
           mimeType: "audio/webm",
         }),
@@ -364,27 +373,24 @@ export default function CopilotChat() {
 
       const data = await res.json();
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: data.content,
-          timestamp: new Date(),
-        },
-      ]);
+      appendMessage(chatId, {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: data.content,
+        timestamp: new Date(),
+      });
+      updateChatPreview(chatId, data.content);
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: "Connection error — make sure the Wonder backend is running.",
-          timestamp: new Date(),
-        },
-      ]);
+      appendMessage(chatId, {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: "Connection error — make sure the Wonder backend is running.",
+        timestamp: new Date(),
+      });
+      updateChatPreview(chatId, "Connection error — make sure the Wonder backend is running.");
     } finally {
       setIsLoading(false);
+      setLoading(chatId, false);
     }
   };
 
@@ -392,7 +398,7 @@ export default function CopilotChat() {
     <section className="w-[40%] flex flex-col border-r-2 border-[#2D2D2D] bg-white/70 backdrop-blur-sm">
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
-        {messages.map((msg) => (
+        {(activeMessages.length > 0 ? activeMessages : [DEFAULT_CHAT_GREETING]).map((msg) => (
           <div
             key={msg.id}
             className={`flex flex-col gap-2 max-w-[90%] ${

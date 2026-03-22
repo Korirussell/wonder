@@ -38,6 +38,13 @@ export interface ChatResponse {
   suggestions?: string[];
 }
 
+export interface Chat {
+  id: string;
+  title: string;
+  createdAt: Date;
+  lastMessagePreview: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";

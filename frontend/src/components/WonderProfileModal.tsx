@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { X } from "lucide-react";
+import { useAuth } from "@/lib/AuthContext";
 
 const GENRES = ["Lo-Fi", "Hip Hop", "House", "Trap", "Jazz", "Afrobeats", "DnB", "Ambient", "R&B", "Soul"];
 const PLUGINS = ["RC-20", "OTT", "SketchCassette", "Digitalis", "Vulf Compressor", "Serum", "Vital", "Autotune", "Fabfilter Pro-Q", "Drum Buss"];
@@ -10,10 +11,9 @@ const ARTISTS = ["J Dilla", "Flying Lotus", "Kaytranada", "Four Tet", "Sade", "N
 function loadFromStorage<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   try {
-    const raw = localStorage.getItem("wonderprofile");
+    const raw = localStorage.getItem(key);
     if (!raw) return fallback;
-    const parsed = JSON.parse(raw);
-    return (parsed[key] as T) ?? fallback;
+    return JSON.parse(raw) as T;
   } catch {
     return fallback;
   }
@@ -24,18 +24,28 @@ interface Props {
 }
 
 export default function WonderProfileModal({ onClose }: Props) {
-  const [selectedGenres, setSelectedGenres] = useState<string[]>(() => loadFromStorage("genres", ["Lo-Fi", "Hip Hop"]));
-  const [selectedPlugins, setSelectedPlugins] = useState<string[]>(() => loadFromStorage("plugins", ["RC-20", "OTT", "SketchCassette"]));
-  const [selectedArtists, setSelectedArtists] = useState<string[]>(() => loadFromStorage("artists", ["J Dilla", "Nujabes"]));
-  const [bpm, setBpm] = useState<string>(() => loadFromStorage("bpmRange", "80-95"));
-  const [defaultKey, setDefaultKey] = useState<string>(() => loadFromStorage("defaultKey", "A Minor"));
+  const { user } = useAuth();
+  const storageKey = `wonderprofile:${user?.id ?? "anonymous"}`;
+  const savedProfile = loadFromStorage<{
+    genres?: string[];
+    plugins?: string[];
+    artists?: string[];
+    bpmRange?: string;
+    defaultKey?: string;
+  }>(storageKey, {});
+
+  const [selectedGenres, setSelectedGenres] = useState<string[]>(savedProfile.genres ?? ["Lo-Fi", "Hip Hop"]);
+  const [selectedPlugins, setSelectedPlugins] = useState<string[]>(savedProfile.plugins ?? ["RC-20", "OTT", "SketchCassette"]);
+  const [selectedArtists, setSelectedArtists] = useState<string[]>(savedProfile.artists ?? ["J Dilla", "Nujabes"]);
+  const [bpm, setBpm] = useState<string>(savedProfile.bpmRange ?? "80-95");
+  const [defaultKey, setDefaultKey] = useState<string>(savedProfile.defaultKey ?? "A Minor");
 
   const toggle = (arr: string[], item: string, set: (v: string[]) => void) => {
     set(arr.includes(item) ? arr.filter((x) => x !== item) : [...arr, item]);
   };
 
   const handleSave = () => {
-    localStorage.setItem("wonderprofile", JSON.stringify({
+    localStorage.setItem(storageKey, JSON.stringify({
       genres: selectedGenres,
       plugins: selectedPlugins,
       artists: selectedArtists,
