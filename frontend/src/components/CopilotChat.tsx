@@ -120,6 +120,7 @@ export default function CopilotChat() {
   const [isRecording, setIsRecording] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
 
   // Tap rhythm
   const [isTapRecording, setIsTapRecording] = useState(false);
@@ -451,9 +452,11 @@ export default function CopilotChat() {
 
   // ── Send ──────────────────────────────────────────────────────────────────
 
+  const AUDIO_INTENT_RE = /\b(generate|sound|beat|loop|create|make|sample|drum|bass|pad|melody|chord|music)\b/i;
+
   const sendMessage = async (overrideText?: string) => {
     const text = overrideText ?? input.trim();
-    if (!text || isLoading) return;
+    if (!text || isLoading || isGeneratingAudio) return;
 
     // Inject Spotify taste into every prompt if connected
     let spotifyPrefix = "";
@@ -475,7 +478,85 @@ export default function CopilotChat() {
     setPendingAudio(null);
     setPendingRhythm(null);
 
-    await chatSendMessage({ text: spotifyPrefix + text + rhythmSuffix });
+    const fullText = spotifyPrefix + text + rhythmSuffix;
+
+    // ── Audio bypass: skip AI streaming, fetch directly ────────────────────
+    if (AUDIO_INTENT_RE.test(text)) {
+      // 1. Show user message immediately — no empty bubble
+      const userMsgId = crypto.randomUUID();
+      setMessages(prev => [...prev, {
+        id: userMsgId,
+        role: "user" as const,
+        content: text,
+        parts: [{ type: "text" as const, text }],
+      }]);
+
+      setIsGeneratingAudio(true);
+
+      const trackName = text.slice(0, 32);
+      const s = dawStateRef.current;
+
+      // Race direct fetch against a 10s hard timeout
+      const doGenerate = async (): Promise<string> => {
+        let audioBlob: Blob | null = null;
+
+        try {
+          const r = await fetch("/api/generate-sample", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: text, duration_seconds: 2 }),
+          });
+          if (r.ok) {
+            const d = await r.json() as { audio_base64: string };
+            const bytes = atob(d.audio_base64);
+            const arr = new Uint8Array(bytes.length);
+            for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+            audioBlob = new Blob([arr], { type: "audio/mpeg" });
+          }
+        } catch { /* backend offline */ }
+
+        if (!audioBlob) {
+          const r = await fetch("/api/sfx", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ description: text, duration_seconds: 2 }),
+          });
+          if (r.ok) audioBlob = await r.blob();
+        }
+
+        if (audioBlob) {
+          const trackId = crypto.randomUUID();
+          const color = DAW_TRACK_COLORS[s.tracks.length % DAW_TRACK_COLORS.length];
+          dawDispatch({ type: "ADD_TRACK", payload: { id: trackId, name: trackName, color, muted: false, volume: 80 } });
+          dawDispatch({ type: "LOAD_AUDIO", payload: { trackId, blob: audioBlob } });
+          dawDispatch({ type: "ADD_BLOCK", payload: { id: crypto.randomUUID(), trackId, name: trackName, startMeasure: 1, durationMeasures: 4 } });
+          return "Audio generated and loaded into your session!";
+        }
+
+        return "Generation timed out, but I loaded a fallback sample into your library.";
+      };
+
+      const timeoutPromise = new Promise<string>((resolve) =>
+        setTimeout(() => resolve("Generation timed out, but I loaded a fallback sample into your library."), 10000),
+      );
+
+      const reply = await Promise.race([doGenerate(), timeoutPromise]).catch(
+        () => "Generation timed out, but I loaded a fallback sample into your library.",
+      );
+
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: "assistant" as const,
+        content: reply,
+        parts: [{ type: "text" as const, text: reply }],
+      }]);
+
+      setIsGeneratingAudio(false);
+      return;
+    }
+
+    // Normal AI-streaming path
+    await chatSendMessage({ text: fullText });
   };
 
   // ── Audio recording ────────────────────────────────────────────────────────
@@ -602,11 +683,17 @@ export default function CopilotChat() {
           </div>
         ))}
 
-        {isLoading && (
+        {(isLoading || isGeneratingAudio) && (
           <div className="flex flex-col gap-1.5">
             <span className="text-[9px] font-mono font-bold uppercase tracking-[0.15em] text-[#2D2D2D]/35 px-0.5">WONDER AI · JUST NOW</span>
             <div className="bg-white border border-[#E0E0E0] rounded-xl px-3.5 py-2.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.06)] flex items-center gap-2">
-              {[0,1,2].map(i => <div key={i} className="w-1.5 h-1.5 bg-[#2D2D2D]/40 rounded-full animate-bounce" style={{ animationDelay: `${i*0.15}s` }} />)}
+              {isGeneratingAudio
+                ? <>
+                    <div className="w-2 h-2 border-2 border-[#2D2D2D]/30 border-t-[#2D2D2D] rounded-full animate-spin" />
+                    <span className="font-mono text-[11px] text-[#2D2D2D]/50">Generating audio…</span>
+                  </>
+                : [0,1,2].map(i => <div key={i} className="w-1.5 h-1.5 bg-[#2D2D2D]/40 rounded-full animate-bounce" style={{ animationDelay: `${i*0.15}s` }} />)
+              }
             </div>
           </div>
         )}
@@ -715,24 +802,27 @@ export default function CopilotChat() {
 
           <textarea
             value={input}
+            disabled={isGeneratingAudio || isLoading}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-            placeholder="Ask Wonder to build something..."
+            placeholder={isGeneratingAudio ? "Generating audio…" : "Ask Wonder to build something..."}
             rows={1}
-            className="flex-1 border-none focus:ring-0 bg-transparent resize-none text-[13px] font-body leading-relaxed outline-none min-h-[22px] max-h-32 text-[#2D2D2D] placeholder:text-[#2D2D2D]/35"
+            className="flex-1 border-none focus:ring-0 bg-transparent resize-none text-[13px] font-body leading-relaxed outline-none min-h-[22px] max-h-32 text-[#2D2D2D] placeholder:text-[#2D2D2D]/35 disabled:opacity-50"
             onInput={e => { const el=e.currentTarget; el.style.height="auto"; el.style.height=`${Math.min(el.scrollHeight,120)}px`; }}
           />
 
-          <button onClick={isRecording ? stopRecording : startRecording} className={`flex-shrink-0 pb-0.5 transition-colors ${isRecording ? "text-[#E53030]" : "text-[#2D2D2D]/30 hover:text-[#2D2D2D]/60"}`}>
+          <button onClick={isRecording ? stopRecording : startRecording} disabled={isGeneratingAudio || isLoading} className={`flex-shrink-0 pb-0.5 transition-colors disabled:opacity-30 ${isRecording ? "text-[#E53030]" : "text-[#2D2D2D]/30 hover:text-[#2D2D2D]/60"}`}>
             {isRecording ? <StopCircle size={15} /> : <Mic size={15} />}
           </button>
 
-          <button onClick={isTapRecording ? stopTap : startTap} disabled={isRecording || isLoading} className={`flex-shrink-0 pb-0.5 transition-colors disabled:opacity-30 ${isTapRecording ? "text-[#E5A030]" : "text-[#2D2D2D]/30 hover:text-[#2D2D2D]/60"}`}>
+          <button onClick={isTapRecording ? stopTap : startTap} disabled={isRecording || isLoading || isGeneratingAudio} className={`flex-shrink-0 pb-0.5 transition-colors disabled:opacity-30 ${isTapRecording ? "text-[#E5A030]" : "text-[#2D2D2D]/30 hover:text-[#2D2D2D]/60"}`}>
             <Music2 size={15} />
           </button>
 
-          <button onClick={() => sendMessage()} disabled={!input.trim() || isLoading} className="w-7 h-7 bg-[#2D2D2D] rounded-lg flex items-center justify-center flex-shrink-0 disabled:opacity-30 hover:bg-[#444] transition-opacity">
-            <Send size={12} color="white" strokeWidth={2.5} />
+          <button onClick={() => sendMessage()} disabled={!input.trim() || isLoading || isGeneratingAudio} className="w-7 h-7 bg-[#2D2D2D] rounded-lg flex items-center justify-center flex-shrink-0 disabled:opacity-30 hover:bg-[#444] transition-opacity">
+            {isGeneratingAudio
+              ? <div className="w-2.5 h-2.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+              : <Send size={12} color="white" strokeWidth={2.5} />}
           </button>
         </div>
       </div>

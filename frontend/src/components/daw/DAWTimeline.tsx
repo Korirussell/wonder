@@ -201,7 +201,12 @@ export function DAWTimeline({
         <div
           ref={timelineRef}
           className="relative cursor-crosshair"
-          style={{ width: totalWidth, height: gridHeight }}
+          style={{
+            width: totalWidth,
+            height: gridHeight,
+            backgroundImage: "radial-gradient(circle, #D1D5DB 1px, transparent 1px)",
+            backgroundSize: "20px 20px",
+          }}
           onClick={handleTimelineClick}
           onMouseDown={handleSelectionMouseDown}
           onMouseMove={handleSelectionMouseMove}

@@ -52,6 +52,10 @@ body {
   background: rgba(45, 45, 45, 0.3);
 }
 
+/* Hidden scrollbar — scroll still works, bar is invisible */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+
 /* Fader thumb gradient */
 .fader-thumb {
   background: linear-gradient(180deg, #fdfdfb 0%, #e0e0e0 100%);

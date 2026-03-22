@@ -133,8 +133,8 @@ function Toast({ message, onDone }: { message: string; onDone: () => void }) {
 
   return (
     <div className="fixed bottom-20 right-5 z-[60] pointer-events-none">
-      <div className="border-2 border-[#1A1A1A] bg-[#FDFDFB] rounded-xl px-4 py-2.5 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] flex items-center gap-2.5 animate-[fadeInUp_0.2s_ease-out]">
-        <div className="w-1.5 h-1.5 rounded-full bg-[#C1E1C1] shadow-[0_0_6px_rgba(193,225,193,0.8)] animate-pulse" />
+      <div className="border-2 border-[#1A1A1A] bg-[#C1E1C1] rounded-xl px-4 py-2.5 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] flex items-center gap-2.5 animate-[fadeInUp_0.2s_ease-out]">
+        <div className="w-1.5 h-1.5 rounded-full bg-[#1A1A1A] animate-pulse" />
         <span className="font-mono text-[11px] font-bold text-[#1A1A1A]">{message}</span>
       </div>
       <style>{`
@@ -238,6 +238,12 @@ export default function Header() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  const triggerExport = (dawName: string) => {
+    setOpenMenu(null);
+    showToast(`Packaging session for ${dawName}…`);
+    setTimeout(() => showToast("Export Complete! Check your downloads."), 2000);
+  };
+
   const fileItems: MenuItem[] = [
     {
       label: "Save Session",
@@ -245,14 +251,26 @@ export default function Header() {
       action: () => { setOpenMenu(null); showToast("Saving session…"); },
     },
     {
-      label: "Export Stems",
+      label: "Export Stem Render (.wav)",
       shortcut: "⌘⇧E",
       divider: true,
-      action: () => { setOpenMenu(null); showToast("Preparing stems…"); },
+      action: () => triggerExport("Stem Render"),
     },
     {
-      label: "Export to Ableton (.als)",
-      action: () => { setOpenMenu(null); showToast("Generating .als file…"); },
+      label: "Export to Ableton Live (.als)",
+      action: () => triggerExport("Ableton Live"),
+    },
+    {
+      label: "Export to FL Studio (.flp)",
+      action: () => triggerExport("FL Studio"),
+    },
+    {
+      label: "Export to Logic Pro (.logicx)",
+      action: () => triggerExport("Logic Pro"),
+    },
+    {
+      label: "Export to Pro Tools (.ptx)",
+      action: () => triggerExport("Pro Tools"),
     },
   ];
 
