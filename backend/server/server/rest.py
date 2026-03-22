@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ._handlers import OUTPUT_ROOT, handle_generate, handle_split, handle_split_and_generate
+from .api.mongo_routes import router as mongo_api_router
 from .utils.audio_to_midi import get_midi_file_path, transcribe_audio_base64
 
 app = FastAPI(
@@ -38,6 +39,8 @@ app.add_middleware(
 # Serve all output files under /files/
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 app.mount("/files", StaticFiles(directory=str(OUTPUT_ROOT)), name="files")
+
+app.include_router(mongo_api_router)
 
 
 # ---------------------------------------------------------------------------
