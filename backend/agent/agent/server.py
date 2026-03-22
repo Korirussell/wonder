@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -24,6 +25,10 @@ from google.adk.utils.context_utils import Aclosing
 from google.genai import types
 
 from .agent import root_agent
+from .logging_config import get_logger, log_event, setup_logging
+
+setup_logging()
+logger = get_logger("wonder.server")
 
 APP_NAME = "wonder"
 
@@ -48,6 +53,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _log_requests(request: Request, call_next: Any) -> Any:
+    start = time.perf_counter()
+    response = await call_next(request)
+    ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "%s %s → %d  (%.0fms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        ms,
+    )
+    return response
 
 # Mount the audio-processing REST server at /audio so external tools
 # (frontend /api/transcribe, etc.) can still reach it without a separate process.
@@ -178,15 +198,27 @@ async def new_session(req: SessionRequest) -> dict[str, str]:
         session_id=session_id,
         state=req.state,
     )
+    logger.info("session created  user=%s  id=%s", req.user_id, session_id)
     return {"session_id": session_id}
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest) -> dict[str, Any]:
     """Non-streaming chat. Collects all events and returns the final text."""
+    has_audio = req.audio_data is not None
+    logger.info(
+        "chat  session=%s  msg=%r%s%s%s",
+        req.session_id,
+        req.message[:80],
+        "  [audio]" if has_audio else "",
+        "  [midi]" if req.midi_context else "",
+        "  [rhythm]" if req.rhythm_context else "",
+    )
+
     await _ensure_session(req.user_id, req.session_id)
     content = _build_content(req)
 
+    t0 = time.perf_counter()
     events: list[Any] = []
     async with Aclosing(
         runner.run_async(
@@ -197,18 +229,27 @@ async def chat(req: ChatRequest) -> dict[str, Any]:
     ) as agen:
         async for event in agen:
             events.append(event)
+            log_event(logger, event)
 
+    elapsed = time.perf_counter() - t0
+    text = _extract_text(events)
+    logger.info(
+        "chat done  events=%d  chars=%d  %.1fs",
+        len(events), len(text), elapsed,
+    )
     _fire_analytics(req)
-    return {"content": _extract_text(events)}
+    return {"content": text}
 
 
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest) -> StreamingResponse:
     """SSE streaming chat. Returns server-sent events."""
+    logger.info("chat/stream  session=%s  msg=%r", req.session_id, req.message[:80])
     await _ensure_session(req.user_id, req.session_id)
     content = _build_content(req)
 
     async def event_gen():
+        event_count = 0
         try:
             async with Aclosing(
                 runner.run_async(
@@ -219,9 +260,14 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
                 )
             ) as agen:
                 async for event in agen:
+                    event_count += 1
+                    log_event(logger, event)
                     yield f"data: {event.model_dump_json(exclude_none=True, by_alias=True)}\n\n"
         except Exception as exc:
+            logger.error("chat/stream error: %s", exc, exc_info=True)
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        finally:
+            logger.info("chat/stream done  events=%d", event_count)
 
     _fire_analytics(req)
     return StreamingResponse(event_gen(), media_type="text/event-stream")
@@ -234,6 +280,7 @@ async def chat_live(
     user_id: str = "default_user",
 ) -> None:
     """WebSocket endpoint for bidirectional live audio streaming."""
+    logger.info("ws/live connect  session=%s  user=%s", session_id, user_id)
     await websocket.accept()
 
     from google.adk.agents.live_request_queue import LiveRequest, LiveRequestQueue
@@ -273,6 +320,7 @@ async def chat_live(
     _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
         task.cancel()
+    logger.info("ws/live disconnect  session=%s", session_id)
 
 
 @app.get("/user/{user_id}/preferences")

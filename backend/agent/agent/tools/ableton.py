@@ -12,11 +12,16 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from typing import Any
+
+from ..logging_config import get_logger
 
 ABLETON_HOST: str = os.getenv("ABLETON_HOST", "localhost")
 ABLETON_PORT: int = int(os.getenv("ABLETON_PORT", "9877"))
 _TIMEOUT: float = 10.0
+
+logger = get_logger("wonder.ableton")
 
 
 async def send_ableton_command(command_type: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -29,12 +34,16 @@ async def send_ableton_command(command_type: str, params: dict[str, Any]) -> dic
     Returns:
         Parsed JSON dict from Ableton, or ``{"error": "..."}`` on failure.
     """
+    t0 = time.perf_counter()
+    logger.debug("ableton → %s  %s", command_type, params)
+
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(ABLETON_HOST, ABLETON_PORT),
             timeout=_TIMEOUT,
         )
     except OSError:
+        logger.warning("ableton not connected (%s:%s)", ABLETON_HOST, ABLETON_PORT)
         return {"error": "Ableton not connected"}
 
     try:
@@ -46,11 +55,20 @@ async def send_ableton_command(command_type: str, params: dict[str, Any]) -> dic
         data: dict[str, Any] = json.loads(raw.decode())
 
         if data.get("status") == "error":
-            return {"error": data.get("message", "Unknown Ableton error")}
-        return data.get("result") or {}
+            msg = data.get("message", "Unknown Ableton error")
+            logger.warning("ableton ✗ %s — %s", command_type, msg)
+            return {"error": msg}
+
+        result = data.get("result") or {}
+        ms = (time.perf_counter() - t0) * 1000
+        logger.debug("ableton ← %s  (%.0fms)", command_type, ms)
+        return result
+
     except asyncio.TimeoutError:
+        logger.warning("ableton timeout  %s", command_type)
         return {"error": "Ableton response timeout"}
     except (json.JSONDecodeError, OSError) as exc:
+        logger.error("ableton error  %s: %s", command_type, exc)
         return {"error": str(exc)}
     finally:
         writer.close()

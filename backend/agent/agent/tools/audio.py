@@ -6,7 +6,12 @@ Calls server handlers directly (same process) — no HTTP round-trip.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
+
+from ..logging_config import get_logger
+
+logger = get_logger("wonder.audio")
 
 
 async def transcribe_audio(
@@ -29,11 +34,13 @@ async def transcribe_audio(
         tempo_bpm: Reference BPM for beat-relative timing.
         pitch_correction_strength: 0–1 float; higher = more pitch correction.
     """
+    logger.info("transcribe_audio  fmt=%s  tempo=%.0f  size=%d chars", input_format, tempo_bpm, len(audio_data))
+    t0 = time.perf_counter()
     try:
         from server.utils.audio_to_midi import transcribe_audio_base64
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
+        result = await loop.run_in_executor(
             None,
             lambda: transcribe_audio_base64(
                 audio_data,
@@ -44,7 +51,15 @@ async def transcribe_audio(
                 pitch_correction_strength,
             ),
         )
+        logger.info(
+            "transcribe_audio done  notes=%s  midi_id=%s  %.1fs",
+            result.get("note_count", "?"),
+            result.get("midi_id", "?"),
+            time.perf_counter() - t0,
+        )
+        return result
     except Exception as exc:
+        logger.error("transcribe_audio failed: %s", exc, exc_info=True)
         return {"error": str(exc), "success": False}
 
 
@@ -59,6 +74,7 @@ async def load_midi_notes(midi_id: str) -> dict[str, Any]:
     Args:
         midi_id: The ID returned by a prior transcribe_audio call.
     """
+    logger.info("load_midi_notes  midi_id=%s", midi_id)
     try:
         import pretty_midi
         from server.utils.audio_to_midi import get_midi_file_path
@@ -87,6 +103,9 @@ async def load_midi_notes(midi_id: str) -> dict[str, Any]:
             ]
             return {"success": True, "midi_id": midi_id, "notes": notes, "note_count": len(notes), "tempo_bpm": bpm}
 
-        return await loop.run_in_executor(None, _parse)
+        result = await loop.run_in_executor(None, _parse)
+        logger.info("load_midi_notes done  notes=%s", result.get("note_count", "?"))
+        return result
     except Exception as exc:
+        logger.error("load_midi_notes failed: %s", exc, exc_info=True)
         return {"error": str(exc), "success": False}

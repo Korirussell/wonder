@@ -6,8 +6,13 @@ Calls server handlers directly (same process) — no HTTP round-trip.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
+
+from ..logging_config import get_logger
+
+logger = get_logger("wonder.soundgen")
 
 
 async def generate_sound(
@@ -35,11 +40,13 @@ async def generate_sound(
         intensity_label: Intensity: "quiet", "soft", "medium", "loud", "very loud".
         api_key: ElevenLabs API key. If None, reads from ELEVENLABS_API_KEY env var.
     """
+    logger.info("generate_sound  %r  cat=%s  pitch=%s  dur=%s", description[:60], category, pitch, duration_seconds)
+    t0 = time.perf_counter()
     try:
         from server._handlers import handle_generate
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
+        result = await loop.run_in_executor(
             None,
             lambda: handle_generate(
                 description,
@@ -51,7 +58,10 @@ async def generate_sound(
                 api_key=api_key,
             ),
         )
+        logger.info("generate_sound done  %.1fs  → %s", time.perf_counter() - t0, result.get("output_path", "?"))
+        return result
     except Exception as exc:
+        logger.error("generate_sound failed: %s", exc, exc_info=True)
         return {"error": str(exc), "success": False}
 
 
@@ -76,13 +86,18 @@ async def split_and_generate_sound(
     if not p.exists():
         return {"error": f"File not found: {file_path}", "success": False}
 
+    logger.info("split_and_generate  %s  desc=%r", p.name, description[:60])
+    t0 = time.perf_counter()
     try:
         from server._handlers import handle_split_and_generate
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
+        result = await loop.run_in_executor(
             None,
             lambda: handle_split_and_generate(p, description, api_key=api_key),
         )
+        logger.info("split_and_generate done  %.1fs  → %s", time.perf_counter() - t0, result.get("output_path", "?"))
+        return result
     except Exception as exc:
+        logger.error("split_and_generate failed: %s", exc, exc_info=True)
         return {"error": str(exc), "success": False}
