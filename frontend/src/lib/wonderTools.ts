@@ -155,22 +155,34 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
     },
   },
   {
-    name: "get_browser_items_at_path",
-    description: "Get browser items at a specific path. Returns items with name and URI that can be loaded.",
+    name: "load_instrument_by_name",
+    description: "Load a built-in Ableton instrument onto a track by name. PREFERRED over get_browser_items_at_path. Works with: 'Wavetable', 'Operator', 'Analog', 'Drift', 'Simpler', 'Drum Rack', 'Electric', 'Tension', 'Meld'. Use this instead of browsing.",
     parameters: {
       type: SchemaType.OBJECT,
-      properties: { path: { type: SchemaType.STRING, description: "Path like 'instruments/synths' or 'drums/acoustic'" } },
+      properties: {
+        track_index: { type: SchemaType.NUMBER, description: "Track index to load instrument onto" },
+        name: { type: SchemaType.STRING, description: "Instrument name e.g. 'Wavetable', 'Operator', 'Drum Rack'" },
+      },
+      required: ["track_index", "name"],
+    },
+  },
+  {
+    name: "get_browser_items_at_path",
+    description: "Get browser items at a specific path. Slow — prefer load_instrument_by_name for loading instruments.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: { path: { type: SchemaType.STRING } },
       required: ["path"],
     },
   },
   {
     name: "load_instrument_or_effect",
-    description: "Load an instrument or effect onto a track using its URI from get_browser_items_at_path.",
+    description: "Load an instrument or effect onto a track using its URI. Prefer load_instrument_by_name instead.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {
         track_index: { type: SchemaType.NUMBER },
-        uri: { type: SchemaType.STRING, description: "URI from get_browser_items_at_path" },
+        uri: { type: SchemaType.STRING },
       },
       required: ["track_index", "uri"],
     },
@@ -186,6 +198,17 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
         kit_path: { type: SchemaType.STRING, description: "Path to the drum kit inside the browser (e.g., 'drums/acoustic/kit1')" },
       },
       required: ["track_index", "rack_uri", "kit_path"],
+    },
+  },
+  {
+    name: "load_midi_notes",
+    description: "Load a previously transcribed MIDI note set by midi_id. Use this after audio transcription when you need the full notes array for add_notes_to_clip.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        midi_id: { type: SchemaType.STRING, description: "Identifier returned by transcription tools" },
+      },
+      required: ["midi_id"],
     },
   },
 

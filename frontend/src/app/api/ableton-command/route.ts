@@ -7,6 +7,9 @@ const ALLOWED_COMMANDS = new Set([
   "stop_playback",
   "set_track_mute",
   "set_track_volume",
+  "fire_clip",
+  "stop_clip",
+  "load_instrument_by_name",
 ]);
 
 export async function POST(req: NextRequest) {

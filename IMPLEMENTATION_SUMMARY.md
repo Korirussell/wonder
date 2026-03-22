@@ -269,15 +269,11 @@ Response:
 ## 🔧 Environment Setup for Testing
 
 ```bash
-# Terminal 1: Start Ableton MCP server (already running)
-cd /Users/kori/codecage/wonder/ableton-mcp
-python3 MCP_Server/server.py
-
-# Terminal 2: Start Next.js frontend
+# Terminal 1: Start Next.js frontend
 cd /Users/kori/codecage/wonder/frontend
 npm run dev
 
-# Terminal 3: Index sample library (one-time)
+# Terminal 2: Index sample library (one-time)
 cd /Users/kori/codecage/wonder
 python3 tagging/tagging.py
 
