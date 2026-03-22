@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sendAbletonCommand } from "@/lib/ableton";
 import { generateSoundEffect, textToSpeech } from "@/lib/elevenlabs";
 import { WONDER_TOOL_DECLARATIONS } from "@/lib/wonderTools";
+import { getMCPToolsForClaude, callMCPTool, resetMCPClient } from "@/lib/mcpClient";
 import {
   createInitialState,
   updateStateAfterToolCall,
@@ -92,6 +93,15 @@ create_midi_track, set_track_name, set_track_volume, set_track_mute
 create_clip, add_notes_to_clip, get_clip_notes, fire_clip, stop_clip, set_clip_name
 load_instrument_by_name, get_track_devices, set_device_parameter_by_name
 generate_sound_effect(description, duration_seconds), transcribe_audio, load_midi_notes
+
+## Audio Processing Tools
+extract_harmonics(audio_data, filename?) — isolates harmonic/melodic content from audio
+process_reverb(audio_data, filename?, room_size?, damping?, wet_level?, dry_level?) — adds reverb
+chop_audio(audio_data, filename?, default_length?, min_duration?, n_clusters?) — slices audio into chops
+adjust_pitch(audio_data, semitones, filename?) — shifts pitch up/down
+adjust_speed(audio_data, speed_factor, filename?) — changes speed without pitch shift
+
+When the user attaches an audio file, its base64 data is available as audio_data. Always describe what the processed audio sounds like and offer next steps.
 `;
 
 const MAX_TOOL_ROUNDS = 10;
@@ -149,6 +159,46 @@ async function executeTool(
     } else if (name === "text_to_speech") {
       if (!elevenLabsKey) throw new Error("ELEVENLABS_API_KEY not set");
       result = await textToSpeech(args.text as string, elevenLabsKey, args.voice_id as string | undefined);
+    } else if (name === "extract_harmonics" || name === "process_reverb" || name === "chop_audio" || name === "adjust_pitch" || name === "adjust_speed") {
+      const AUDIO_BACKEND = process.env.AUDIO_BACKEND_URL || "http://localhost:8001";
+      const endpointMap: Record<string, string> = {
+        extract_harmonics: "/extract-harmonics",
+        process_reverb: "/process-reverb",
+        chop_audio: "/chop-audio",
+        adjust_pitch: "/adjust-pitch",
+        adjust_speed: "/adjust-speed",
+      };
+      const endpoint = endpointMap[name];
+      // Map snake_case args to the Python API format
+      const body: Record<string, unknown> = {
+        audio_data: args.audio_data,
+        filename: args.filename || "audio.wav",
+      };
+      if (name === "process_reverb") {
+        if (args.room_size !== undefined) body.room_size = args.room_size;
+        if (args.damping !== undefined) body.damping = args.damping;
+        if (args.wet_level !== undefined) body.wet_level = args.wet_level;
+        if (args.dry_level !== undefined) body.dry_level = args.dry_level;
+      }
+      if (name === "chop_audio") {
+        if (args.default_length !== undefined) body.default_length = args.default_length;
+        if (args.min_duration !== undefined) body.min_duration = args.min_duration;
+        if (args.n_clusters !== undefined) body.n_clusters = args.n_clusters;
+      }
+      if (name === "adjust_pitch") body.semitones = args.semitones;
+      if (name === "adjust_speed") body.speed_factor = args.speed_factor;
+
+      const audioRes = await fetch(`${AUDIO_BACKEND}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!audioRes.ok) {
+        const err = await audioRes.text();
+        throw new Error(`Audio backend error: ${err}`);
+      }
+      result = await audioRes.json();
     } else {
       result = await sendAbletonCommand(name, args);
     }
@@ -163,76 +213,75 @@ async function executeTool(
   }
 }
 
-// ── Claude agentic loop ────────────────────────────────────────────────────
-
-function toClaudeTools(): Anthropic.Tool[] {
-  return WONDER_TOOL_DECLARATIONS.map((decl) => {
-    // Convert Gemini SchemaType enum values to plain JSON Schema strings
-    const convertSchema = (schema: Record<string, unknown>): Record<string, unknown> => {
-      const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(schema)) {
-        if (k === "type" && typeof v === "string") {
-          out[k] = v.toLowerCase();
-        } else if (k === "properties" && typeof v === "object" && v !== null) {
-          const props: Record<string, unknown> = {};
-          for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) {
-            props[pk] = convertSchema(pv as Record<string, unknown>);
-          }
-          out[k] = props;
-        } else {
-          out[k] = v;
-        }
-      }
-      return out;
-    };
-
-    const params = decl.parameters as Record<string, unknown> | undefined;
-    return {
-      name: decl.name,
-      description: decl.description ?? "",
-      input_schema: params ? convertSchema(params) as Anthropic.Tool["input_schema"] : { type: "object" as const, properties: {} },
-    };
-  });
-}
+// ── Claude + MCP agentic loop ─────────────────────────────────────────────
 
 async function runClaudeLoop(
   anthropic: Anthropic,
   messages: Anthropic.MessageParam[],
   systemPrompt: string
 ): Promise<string> {
-  let sessionState: SessionState = createInitialState();
-  const claudeTools = toClaudeTools();
+  // Fetch tools live from the MCP server — no manual declarations needed
+  let mcpTools: Anthropic.Tool[];
+  try {
+    mcpTools = await getMCPToolsForClaude();
+    console.log(`[Wonder MCP] ${mcpTools.length} tools available from MCP server`);
+  } catch (err) {
+    console.warn("[Wonder MCP] MCP server unavailable, falling back to manual tools:", err);
+    resetMCPClient();
+    mcpTools = toClaudeToolsFallback();
+  }
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 4096,
       system: systemPrompt,
-      tools: claudeTools,
+      tools: mcpTools,
       messages,
     });
 
-    if (response.stop_reason === "end_turn") {
+    if (response.stop_reason === "end_turn" || response.stop_reason !== "tool_use") {
       const textBlock = response.content.find((b) => b.type === "text");
       return textBlock ? (textBlock as Anthropic.TextBlock).text : "";
     }
 
-    if (response.stop_reason !== "tool_use") {
-      const textBlock = response.content.find((b) => b.type === "text");
-      return textBlock ? (textBlock as Anthropic.TextBlock).text : "";
-    }
-
-    // Process tool calls
     const toolUseBlocks = response.content.filter((b) => b.type === "tool_use") as Anthropic.ToolUseBlock[];
+
     const toolResults = await Promise.all(
       toolUseBlocks.map(async (block) => {
         const args = (block.input as Record<string, unknown>) ?? {};
-        const { result, error, sessionState: newState } = await executeTool(block.name, args, sessionState);
-        sessionState = newState;
+        console.log(`[Wonder MCP] → ${block.name}`, JSON.stringify(args).slice(0, 150));
+
+        let content: string;
+        try {
+          // ElevenLabs tools bypass MCP and go direct
+          const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
+          if (block.name === "generate_sound_effect") {
+            if (!elevenLabsKey) throw new Error("ELEVENLABS_API_KEY not set");
+            const r = await generateSoundEffect(args.description as string, (args.duration_seconds as number | undefined) ?? 2.0, elevenLabsKey);
+            content = JSON.stringify(r);
+          } else if (block.name === "text_to_speech") {
+            if (!elevenLabsKey) throw new Error("ELEVENLABS_API_KEY not set");
+            const r = await textToSpeech(args.text as string, elevenLabsKey, args.voice_id as string | undefined);
+            content = JSON.stringify(r);
+          } else {
+            content = await callMCPTool(block.name, args);
+          }
+          console.log(`[Wonder MCP] ✓ ${block.name}:`, content.slice(0, 100));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[Wonder MCP] ✗ ${block.name}: ${msg}`);
+          // Reset client on connection errors so next request reconnects
+          if (msg.includes("connect") || msg.includes("EPIPE") || msg.includes("closed")) {
+            resetMCPClient();
+          }
+          content = JSON.stringify({ error: msg, hint: getHint(block.name, msg) });
+        }
+
         return {
           type: "tool_result" as const,
           tool_use_id: block.id,
-          content: JSON.stringify(error ? { error, hint: getHint(block.name, error) } : { result }),
+          content,
         };
       })
     );
@@ -242,6 +291,31 @@ async function runClaudeLoop(
   }
 
   return "Done.";
+}
+
+/** Fallback: convert Gemini-format WONDER_TOOL_DECLARATIONS to Anthropic format */
+function toClaudeToolsFallback(): Anthropic.Tool[] {
+  const convertSchema = (schema: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(schema)) {
+      if (k === "type" && typeof v === "string") out[k] = v.toLowerCase();
+      else if (k === "properties" && typeof v === "object" && v !== null) {
+        const props: Record<string, unknown> = {};
+        for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) {
+          props[pk] = convertSchema(pv as Record<string, unknown>);
+        }
+        out[k] = props;
+      } else out[k] = v;
+    }
+    return out;
+  };
+  return WONDER_TOOL_DECLARATIONS.map((decl) => ({
+    name: decl.name,
+    description: decl.description ?? "",
+    input_schema: decl.parameters
+      ? convertSchema(decl.parameters as unknown as Record<string, unknown>) as Anthropic.Tool["input_schema"]
+      : { type: "object" as const, properties: {} },
+  }));
 }
 
 // ── Gemini agentic loop ────────────────────────────────────────────────────

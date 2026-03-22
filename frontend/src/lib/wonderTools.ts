@@ -265,4 +265,75 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ["query"],
     },
   },
+
+  // ─── Audio Processing ───────────────────────────────────────────────────────
+  {
+    name: "extract_harmonics",
+    description: "Extract harmonic components from an audio file using HPSS (Harmonic-Percussive Source Separation). Isolates melodic/harmonic content from percussion. Use this when the user wants to separate harmony from drums, or wants the melodic part of a sample.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64 encoded audio data" },
+        filename: { type: SchemaType.STRING, description: "Original filename for reference" },
+      },
+      required: ["audio_data"],
+    },
+  },
+  {
+    name: "process_reverb",
+    description: "Apply reverb effect to audio. Adds spatial depth and ambience. Use this when the user wants to add space, room, or ambience to a sound.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64 encoded audio data" },
+        filename: { type: SchemaType.STRING, description: "Original filename" },
+        room_size: { type: SchemaType.NUMBER, description: "Room size 0.0-1.0, default 0.5" },
+        damping: { type: SchemaType.NUMBER, description: "High-freq damping 0.0-1.0, default 0.5" },
+        wet_level: { type: SchemaType.NUMBER, description: "Reverb level 0.0-1.0, default 0.3" },
+        dry_level: { type: SchemaType.NUMBER, description: "Dry signal level 0.0-1.0, default 0.7" },
+      },
+      required: ["audio_data"],
+    },
+  },
+  {
+    name: "chop_audio",
+    description: "Intelligently chop audio into segments using onset detection and k-means clustering. Creates multiple audio segments based on musical onsets. Use this to create sample chops from a longer audio file.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64 encoded audio data" },
+        filename: { type: SchemaType.STRING, description: "Original filename" },
+        default_length: { type: SchemaType.NUMBER, description: "Default chop length in seconds, default 1.8" },
+        min_duration: { type: SchemaType.NUMBER, description: "Minimum chop duration in seconds, default 0.2" },
+        n_clusters: { type: SchemaType.NUMBER, description: "Number of k-means clusters for grouping similar chops, default 6" },
+      },
+      required: ["audio_data"],
+    },
+  },
+  {
+    name: "adjust_pitch",
+    description: "Shift the pitch of audio by a number of semitones. Positive = higher pitch, negative = lower pitch.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64 encoded audio data" },
+        filename: { type: SchemaType.STRING, description: "Original filename" },
+        semitones: { type: SchemaType.NUMBER, description: "Semitones to shift. Positive = up, negative = down" },
+      },
+      required: ["audio_data", "semitones"],
+    },
+  },
+  {
+    name: "adjust_speed",
+    description: "Change the playback speed of audio without changing pitch. 1.0 = normal, 2.0 = double speed, 0.5 = half speed.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64 encoded audio data" },
+        filename: { type: SchemaType.STRING, description: "Original filename" },
+        speed_factor: { type: SchemaType.NUMBER, description: "Speed multiplier. 1.0 = normal, 2.0 = 2x faster, 0.5 = 2x slower" },
+      },
+      required: ["audio_data", "speed_factor"],
+    },
+  },
 ];

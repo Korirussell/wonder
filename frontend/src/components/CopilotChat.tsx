@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Paperclip, Mic, Send, StopCircle, Music2, X } from "lucide-react";
-import { ChatMessage } from "@/types";
+import { ChatMessage, AudioAttachment } from "@/types";
 
 const INITIAL_MESSAGES: ChatMessage[] = [
   {
@@ -96,8 +96,10 @@ export default function CopilotChat() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [pendingAudio, setPendingAudio] = useState<AudioAttachment | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const [isTapRecording, setIsTapRecording] = useState(false);
@@ -119,18 +121,39 @@ export default function CopilotChat() {
     }
   }, [input]);
 
+  const handleAudioFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = (reader.result as string).split(",")[1];
+      setPendingAudio({
+        filename: file.name,
+        base64,
+        mimeType: file.type || "audio/wav",
+        size: file.size,
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
+
+    const content = pendingAudio
+      ? `${input.trim()}\n\n📎 ${pendingAudio.filename}`
+      : input.trim();
 
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
-      content: input.trim(),
+      content,
       timestamp: new Date(),
+      audioAttachment: pendingAudio ?? undefined,
     };
 
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    const capturedAudio = pendingAudio;
+    setPendingAudio(null);
     setIsLoading(true);
 
     const rhythmContext = pendingRhythm
@@ -155,6 +178,8 @@ export default function CopilotChat() {
             content: m.content,
           })),
           rhythmContext,
+          audioData: capturedAudio?.base64,
+          mimeType: capturedAudio?.mimeType,
         }),
       });
 
@@ -443,10 +468,30 @@ export default function CopilotChat() {
 
       {/* Input area */}
       <div className="px-6 py-5 flex-shrink-0">
-        <div className="bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow flex items-end p-3 gap-3 focus-within:ring-2 focus-within:ring-[#C1E1C1] transition-all">
-          <button className="p-2 text-[#2D2D2D]/40 hover:text-[#2D2D2D] transition-colors self-end">
+        <div className="relative bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow flex items-end p-3 gap-3 focus-within:ring-2 focus-within:ring-[#C1E1C1] transition-all">
+          {pendingAudio && (
+            <div className="absolute bottom-full mb-2 left-3 flex items-center gap-2 bg-[#FEF08A] border-2 border-[#2D2D2D] rounded-xl px-3 py-1.5 hard-shadow-sm text-xs font-mono">
+              <span>📎 {pendingAudio.filename}</span>
+              <button onClick={() => setPendingAudio(null)} className="text-[#2D2D2D]/60 hover:text-[#2D2D2D]">×</button>
+            </div>
+          )}
+          <button
+            onClick={() => audioInputRef.current?.click()}
+            className="p-2 text-[#2D2D2D]/40 hover:text-[#2D2D2D] transition-colors self-end"
+          >
             <Paperclip size={18} />
           </button>
+          <input
+            ref={audioInputRef}
+            type="file"
+            accept="audio/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleAudioFile(file);
+              e.target.value = "";
+            }}
+          />
 
           <textarea
             ref={textareaRef}
