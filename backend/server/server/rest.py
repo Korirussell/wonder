@@ -49,6 +49,14 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/health/mongo")
+def health_mongo() -> dict[str, object]:
+    """MongoDB Atlas connectivity (optional — see server/mongo/README.md)."""
+    from .mongo import mongo_health
+
+    return mongo_health()
+
+
 # ---------------------------------------------------------------------------
 # /split
 # ---------------------------------------------------------------------------

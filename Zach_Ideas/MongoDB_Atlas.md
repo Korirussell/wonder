@@ -1,5 +1,7 @@
 # MongoDB Atlas — Wonder integration
 
+**Boilerplate (Python):** `backend/server/server/mongo/` — collections `users`, `samples`, `sessions`, Snowflake-oriented `session_document_to_analytics_events`, and `GET /health/mongo` on the FastAPI app.
+
 ## Why it’s relevant
 
 Wonder needs a **flexible cloud backend** for:
