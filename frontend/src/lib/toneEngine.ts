@@ -30,6 +30,10 @@ export interface StemPlayer {
   id: string;
   name: string;
   player: Tone.Player;
+  // Amp sim chain (before user EQ): Player → ampDrive → ampTone → cabSim → eq → reverb → channel
+  ampDrive: Tone.Distortion;
+  ampTone: Tone.EQ3;
+  cabSim: Tone.Filter;
   eq: Tone.EQ3;
   reverb: Tone.Reverb;
   channel: Tone.Channel;
@@ -219,6 +223,9 @@ class ToneEngine {
     const existing = this.stems.get(id);
     if (existing) {
       existing.player.dispose();
+      existing.ampDrive.dispose();
+      existing.ampTone.dispose();
+      existing.cabSim.dispose();
       existing.eq.dispose();
       existing.reverb.dispose();
       existing.channel.dispose();
@@ -237,6 +244,19 @@ class ToneEngine {
     const eq = new Tone.EQ3(0, 0, 0);
     eq.connect(reverb);
 
+    // ── Amp sim chain (bypassed by default) ──────────────────────────────────
+    // Cabinet sim: lowpass at ~4500 Hz simulates speaker; 20000 = open/bypassed
+    const cabSim = new Tone.Filter({ type: "lowpass", frequency: 20000, rolloff: -12 });
+    cabSim.connect(eq);
+
+    // Amp tone stack (independent from user EQ)
+    const ampTone = new Tone.EQ3(0, 0, 0);
+    ampTone.connect(cabSim);
+
+    // Preamp drive — wet=0 means fully dry (bypassed) until enabled
+    const ampDrive = new Tone.Distortion({ distortion: 0.5, wet: 0, oversample: "2x" });
+    ampDrive.connect(ampTone);
+
     const player = new Tone.Player({
       url,
       loop: shouldLoop,
@@ -248,10 +268,10 @@ class ToneEngine {
         }
       },
     });
-    player.connect(eq);
+    player.connect(ampDrive);
     await Tone.loaded();
 
-    this.stems.set(id, { id, name, player, eq, reverb, channel });
+    this.stems.set(id, { id, name, player, ampDrive, ampTone, cabSim, eq, reverb, channel });
     console.log(`[ToneEngine] Loaded stem: ${name} (${id})${shouldLoop ? " [loop]" : ""}`);
   }
 
@@ -269,6 +289,9 @@ class ToneEngine {
     const stem = this.stems.get(id);
     if (!stem) return;
     stem.player.dispose();
+    stem.ampDrive.dispose();
+    stem.ampTone.dispose();
+    stem.cabSim.dispose();
     stem.eq.dispose();
     stem.reverb.dispose();
     stem.channel.dispose();
@@ -351,6 +374,35 @@ class ToneEngine {
     if (stem) stem.reverb.wet.value = Math.max(0, Math.min(1, wet));
   }
 
+  // ─── Amp Simulator ────────────────────────────────────────────────────────
+
+  /** Enable/disable amp sim (wet=1 routes through distortion, 0 = dry bypass) */
+  setStemAmpEnabled(id: string, enabled: boolean): void {
+    const stem = this.stems.get(id);
+    if (stem) stem.ampDrive.wet.value = enabled ? 1 : 0;
+  }
+
+  /** Drive amount 0–1 (preamp distortion) */
+  setStemAmpDrive(id: string, drive: number): void {
+    const stem = this.stems.get(id);
+    if (stem) stem.ampDrive.distortion = Math.max(0, Math.min(1, drive));
+  }
+
+  /** Amp tone stack — bass/mid/treble in dB */
+  setStemAmpTone(id: string, bass: number, mid: number, treble: number): void {
+    const stem = this.stems.get(id);
+    if (!stem) return;
+    stem.ampTone.low.value = bass;
+    stem.ampTone.mid.value = mid;
+    stem.ampTone.high.value = treble;
+  }
+
+  /** Cabinet sim — true = lowpass at ~4500 Hz (speaker roll-off), false = open */
+  setStemAmpCabinet(id: string, enabled: boolean): void {
+    const stem = this.stems.get(id);
+    if (stem) stem.cabSim.frequency.value = enabled ? 4500 : 20000;
+  }
+
   getStemDuration(id: string): number | null {
     const stem = this.stems.get(id);
     if (!stem || !stem.player.loaded) return null;
@@ -412,12 +464,19 @@ class ToneEngine {
 
   // ─── Guitar Amp Methods ────────────────────────────────────────────────────
 
-  async startAmp(): Promise<void> {
+  /** Enumerate audio input devices. Requires mic permission — call after first getUserMedia grant. */
+  async listAudioInputs(): Promise<MediaDeviceInfo[]> {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((d) => d.kind === "audioinput");
+  }
+
+  async startAmp(deviceId?: string): Promise<void> {
     if (!this.initialized) await this.init();
     if (this.ampActive) return;
 
     const input      = new Tone.UserMedia();
-    await input.open();   // triggers browser mic/instrument permission prompt
+    // Pass deviceId so the user can pick a specific input (e.g. line 2 on an interface)
+    await input.open(deviceId);   // triggers browser mic/instrument permission prompt
 
     const gain       = new Tone.Gain(1);
     const distortion = new Tone.Distortion(0);
@@ -494,6 +553,88 @@ class ToneEngine {
   }
   isAmpActive(): boolean { return this.ampActive; }
 
+  // ─── Loopback Latency Calibration ────────────────────────────────────────
+  //
+  // Plays a short impulse through the output, records the mic simultaneously,
+  // then finds the peak in the recorded buffer to measure round-trip latency.
+  // Requires: mic permission + audio playing through speakers (not headphones
+  // will work but loopback through the same interface input is most accurate).
+  //
+  // Returns latency in seconds, or throws on error.
+
+  async measureRecordingLatency(): Promise<number> {
+    if (!this.initialized) await this.init();
+
+    const RECORD_DURATION_MS = 600;
+    const CLICK_OFFSET_MS    = 50;  // small gap before the click fires
+
+    // Open mic
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+
+    const ctx = new AudioContext();
+
+    // Build a short impulsive click buffer (1ms single-sample spike)
+    const clickBuf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.001), ctx.sampleRate);
+    clickBuf.getChannelData(0)[0] = 1.0;
+
+    // Record everything coming in from the mic
+    const micSrc   = ctx.createMediaStreamSource(stream);
+    const recorder = ctx.createScriptProcessor(4096, 1, 1);
+    const recorded: Float32Array[] = [];
+    recorder.onaudioprocess = (e) => {
+      recorded.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+    micSrc.connect(recorder);
+    recorder.connect(ctx.destination);   // must be connected to run
+
+    // Wait a bit then fire the click
+    await new Promise<void>((r) => setTimeout(r, CLICK_OFFSET_MS));
+    const clickSrc = ctx.createBufferSource();
+    clickSrc.buffer = clickBuf;
+    clickSrc.connect(ctx.destination);
+    const clickFiredAt = ctx.currentTime;
+    clickSrc.start();
+
+    // Record for RECORD_DURATION_MS
+    await new Promise<void>((r) => setTimeout(r, RECORD_DURATION_MS));
+
+    // Tear down
+    micSrc.disconnect();
+    recorder.disconnect();
+    stream.getTracks().forEach((t) => t.stop());
+
+    // Flatten recorded chunks into one array
+    const totalSamples = recorded.reduce((sum, c) => sum + c.length, 0);
+    const flat = new Float32Array(totalSamples);
+    let offset = 0;
+    for (const chunk of recorded) { flat.set(chunk, offset); offset += chunk.length; }
+
+    // Find the sample index with maximum absolute amplitude (the click echo)
+    let peakIdx = 0;
+    let peakAmp = 0;
+    for (let i = 0; i < flat.length; i++) {
+      const v = Math.abs(flat[i]);
+      if (v > peakAmp) { peakAmp = v; peakIdx = i; }
+    }
+
+    await ctx.close();
+
+    if (peakAmp < 0.01) {
+      // Nothing detected — mic not picking up output (headphones / different device)
+      throw new Error("No loopback signal detected — make sure speakers are on and mic can hear them");
+    }
+
+    // Time from click fire → peak arrival
+    const clickFiredSample = Math.round(clickFiredAt * ctx.sampleRate);
+    const latencySamples   = peakIdx - clickFiredSample;
+    const latencySec       = Math.max(0, latencySamples / ctx.sampleRate);
+
+    console.log(`[ToneEngine] Loopback latency measured: ${(latencySec * 1000).toFixed(1)} ms (peak amp ${peakAmp.toFixed(3)})`);
+    return latencySec;
+  }
+
   // ─── Cleanup ──────────────────────────────────────────────────────────────
 
   dispose(): void {
@@ -502,6 +643,9 @@ class ToneEngine {
     Object.values(this.drumKit).forEach((p) => p?.dispose());
     this.stems.forEach((s) => {
       s.player.dispose();
+      s.ampDrive.dispose();
+      s.ampTone.dispose();
+      s.cabSim.dispose();
       s.eq.dispose();
       s.reverb.dispose();
       s.channel.dispose();

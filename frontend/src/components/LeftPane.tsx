@@ -269,6 +269,7 @@ function BrowseTab() {
   const [hasFetchedCloud, setHasFetchedCloud] = useState(false);
   const [loadingSampleId, setLoadingSampleId] = useState<string | null>(null);
   const [cloudToastVisible, setCloudToastVisible] = useState(false);
+  const [kidsCategory, setKidsCategory] = useState("drums");
 
   // Local folder state — lives entirely in the browser, no backend
   const [localFolders, setLocalFolders] = useState<LocalFolder[]>([]);
@@ -425,6 +426,68 @@ function BrowseTab() {
       setCloudToastVisible(false);
     }
   };
+
+  if (state.kidsMode) {
+    const kidsTiles = [
+      { id: "drums", emoji: "🥁", label: "Drums", accent: "#F9A8D4" },
+      { id: "bass", emoji: "🎸", label: "Bass", accent: "#7DD3FC" },
+      { id: "melody", emoji: "🎹", label: "Melody", accent: "#FDE68A" },
+      { id: "fun", emoji: "✨", label: "Fun Sounds", accent: "#C4B5FD" },
+    ];
+
+    return (
+      <div className="relative flex flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(249,168,212,0.22),_transparent_40%),radial-gradient(circle_at_bottom_right,_rgba(125,211,252,0.2),_transparent_35%),#FFFBEB]">
+        <div className="border-b-2 border-[#F472B6] bg-[#FFF4D8] px-4 py-4">
+          <p
+            className="text-[11px] font-black uppercase tracking-[0.2em] text-[#1A1A1A]"
+            style={{ fontFamily: "'Hiragino Maru Gothic ProN', 'Arial Rounded MT Bold', ui-rounded, system-ui, sans-serif" }}
+          >
+            Wonder Kids Browser
+          </p>
+          <p className="mt-1 text-[12px] font-semibold text-[#1A1A1A]/65">
+            Tap a sound family to start building a song.
+          </p>
+        </div>
+
+        <div className="grid flex-1 grid-cols-2 gap-4 p-4">
+          {kidsTiles.map((tile) => {
+            const active = kidsCategory === tile.id;
+            return (
+              <button
+                key={tile.id}
+                onClick={() => setKidsCategory(tile.id)}
+                className={`flex flex-col items-center justify-center border-2 px-4 py-5 text-center shadow-[6px_6px_0px_0px_rgba(26,26,26,0.18)] transition-all ${
+                  active ? "scale-[1.02]" : ""
+                }`}
+                style={{
+                  backgroundColor: tile.accent,
+                  borderColor: active ? "#1A1A1A" : "rgba(26,26,26,0.75)",
+                  borderRadius: 24,
+                }}
+              >
+                <span className="text-5xl leading-none">{tile.emoji}</span>
+                <span
+                  className="mt-3 text-[15px] font-black uppercase tracking-[0.16em] text-[#1A1A1A]"
+                  style={{ fontFamily: "'Hiragino Maru Gothic ProN', 'Arial Rounded MT Bold', ui-rounded, system-ui, sans-serif" }}
+                >
+                  {tile.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="border-t-2 border-[#7DD3FC] bg-[#FFF4D8] px-4 py-3">
+          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#1A1A1A]">
+            {kidsCategory === "drums" ? "Big beats and claps." : null}
+            {kidsCategory === "bass" ? "Low grooves and guitar energy." : null}
+            {kidsCategory === "melody" ? "Pianos, keys, and bright hooks." : null}
+            {kidsCategory === "fun" ? "Silly hits, sparkles, and surprises." : null}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -680,7 +743,12 @@ export default function LeftPane() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {activeTab === "chat" ? <CopilotChat /> : <BrowseTab />}
+        <div className={activeTab === "chat" ? "flex-1 flex min-h-0" : "hidden"}>
+          <CopilotChat />
+        </div>
+        <div className={activeTab === "browse" ? "flex-1 flex min-h-0" : "hidden"}>
+          <BrowseTab />
+        </div>
       </div>
     </div>
   );

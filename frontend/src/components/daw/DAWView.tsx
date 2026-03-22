@@ -11,6 +11,7 @@ import { DAWTrackList } from "./DAWTrackList";
 import { DAWTimeline } from "./DAWTimeline";
 import { DrumRack } from "./DrumRack";
 import { MixerDrawer } from "./MixerDrawer";
+import { KidsModeStage } from "./KidsModeStage";
 import ToneWaveformViz from "@/components/ToneWaveformViz";
 import type { DAWTrack, DrumPattern } from "@/types";
 
@@ -36,9 +37,13 @@ export default function DAWView() {
   const [mixerOpen, setMixerOpen] = useState(false);
   const { analysis, analyzing, analyze } = useAudioAnalysis();
   const stateRef = useRef(state);
+  const kidsPlaybackTokenRef = useRef(0);
   // Raw MediaStream from getUserMedia — used for both MediaRecorder and monitoring
-  const rawStreamRef    = useRef<MediaStream | null>(null);
-  const monitorNodeRef  = useRef<AudioNode | null>(null);
+  const rawStreamRef     = useRef<MediaStream | null>(null);
+  const monitorNodeRef   = useRef<AudioNode | null>(null);
+  const micGainNodeRef   = useRef<GainNode | null>(null);      // mic input boost
+  const recordStreamRef  = useRef<MediaStream | null>(null);   // boosted stream fed to MediaRecorder
+  const recordCtxRef     = useRef<AudioContext | null>(null);  // Web Audio ctx for gain chain
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const activeRecordingRef = useRef<{
@@ -48,9 +53,59 @@ export default function DAWView() {
     mimeType: string;
   } | null>(null);
 
+  // Metronome + count-in state (local — no need to persist in DAWContext)
+  const [metronomeOn, setMetronomeOn] = useState(false);
+  const [countInOn,   setCountInOn]   = useState(false);
+  const countInRef = useRef(countInOn);
+  useEffect(() => { countInRef.current = countInOn; }, [countInOn]);
+
+  // Loopback-measured latency offset (null = not yet calibrated, use baseLatency fallback)
+  const measuredLatencyRef  = useRef<number | null>(null);
+  const [calibrating,       setCalibrating]  = useState(false);
+  const [calibratedMs,      setCalibratedMs] = useState<number | null>(null);
+
+  const handleCalibrate = useCallback(async () => {
+    setCalibrating(true);
+    try {
+      await toneEngine.init();
+      const sec = await toneEngine.measureRecordingLatency();
+      measuredLatencyRef.current = sec;
+      setCalibratedMs(Math.round(sec * 1000));
+    } catch (e) {
+      console.warn("[Calibrate]", e);
+      setCalibratedMs(-1); // signal error in UI
+    } finally {
+      setCalibrating(false);
+    }
+  }, []);
+
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  const queueKidsPlayback = useCallback(async () => {
+    const token = ++kidsPlaybackTokenRef.current;
+
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 220);
+    });
+
+    if (token !== kidsPlaybackTokenRef.current) return;
+
+    stopPlayback();
+    Tone.getTransport().seconds = 0;
+    dispatch({
+      type: "SET_TRANSPORT",
+      payload: { currentMeasure: 1, isPlaying: false },
+    });
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+
+    if (token !== kidsPlaybackTokenRef.current) return;
+    await startPlayback();
+  }, [dispatch, startPlayback, stopPlayback]);
 
   // Connect / disconnect mic stream to speakers for live monitoring
   const syncMonitorRouting = useCallback(() => {
@@ -69,9 +124,36 @@ export default function DAWView() {
     } catch { /* ignore */ }
   }, []);
 
+  // Toggle metronome via toneEngine
+  const handleToggleMetronome = useCallback(() => {
+    setMetronomeOn((prev) => {
+      const next = !prev;
+      toneEngine.setMetronome(next);
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     syncMonitorRouting();
   }, [state.recording.monitorEnabled, syncMonitorRouting]);
+
+  // Pre-warm: open mic stream eagerly so getUserMedia doesn't add latency at record time
+  useEffect(() => {
+    let cancelled = false;
+    const warmUp = async () => {
+      try {
+        await toneEngine.init();
+        if (cancelled) return;
+        if (!rawStreamRef.current || rawStreamRef.current.getTracks().every((t) => t.readyState === "ended")) {
+          rawStreamRef.current = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+          });
+        }
+      } catch { /* permission not granted yet — will retry on record */ }
+    };
+    void warmUp();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     Tone.getTransport().loop = state.loop.loopEnabled;
@@ -84,8 +166,18 @@ export default function DAWView() {
       mediaRecorderRef.current?.stop();
       rawStreamRef.current?.getTracks().forEach((t) => t.stop());
       try { monitorNodeRef.current?.disconnect(); } catch { /* ignore */ }
+      try { recordCtxRef.current?.close(); } catch { /* ignore */ }
     };
   }, []);
+
+  useEffect(() => {
+    const win = window as unknown as Record<string, unknown>;
+    win.__wonderPlayFromStart = queueKidsPlayback;
+
+    return () => {
+      delete win.__wonderPlayFromStart;
+    };
+  }, [queueKidsPlayback]);
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
@@ -186,30 +278,44 @@ export default function DAWView() {
 
     const trackId = ensureRecordTrack(requestedTrackId);
 
+    // ── Step 1: All async pre-work BEFORE touching the recorder ──────────────
+    // Do everything async here so recorder.start() + transport.start() can fire
+    // back-to-back with zero awaits between them.
     await toneEngine.init();
 
-    // Get the raw MediaStream directly — no Tone.UserMedia internals needed
+    // Get mic stream (usually already open from warm-up effect above)
     if (!rawStreamRef.current || rawStreamRef.current.getTracks().every((t) => t.readyState === "ended")) {
       rawStreamRef.current = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       });
     }
-    const mediaStream = rawStreamRef.current;
+    const rawStream = rawStreamRef.current;
+
+    // ── Mic gain boost ───────────────────────────────────────────────────────
+    if (recordCtxRef.current) {
+      try { await recordCtxRef.current.close(); } catch { /* ignore */ }
+    }
+    const recordCtx = new AudioContext();
+    recordCtxRef.current = recordCtx;
+    const micSrc   = recordCtx.createMediaStreamSource(rawStream);
+    const gainNode = recordCtx.createGain();
+    gainNode.gain.value = 4;
+    micGainNodeRef.current = gainNode;
+    const destNode = recordCtx.createMediaStreamDestination();
+    micSrc.connect(gainNode);
+    gainNode.connect(destNode);
+    recordStreamRef.current = destNode.stream;
+
     syncMonitorRouting();
 
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus"
       : "audio/webm";
 
+    // Pre-build the recorder but don't start it yet
     chunksRef.current = [];
-    const recorder = new MediaRecorder(mediaStream, { mimeType });
+    const recorder = new MediaRecorder(destNode.stream, { mimeType });
     mediaRecorderRef.current = recorder;
-
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        chunksRef.current.push(event.data);
-      }
-    };
 
     recorder.onstop = async () => {
       const activeRecording = activeRecordingRef.current;
@@ -272,18 +378,50 @@ export default function DAWView() {
       });
     };
 
+    // ── Step 2: Count-in (still async, happens before we arm) ────────────────
+    const doCountIn = countInRef.current;
     if (!stateRef.current.transport.isPlaying) {
-      await startPlayback();
+      if (doCountIn) {
+        const bpm = stateRef.current.transport.bpm;
+        const barMs = (4 * 60 * 1000) / bpm;
+        const wasMetronome = metronomeOn;
+        toneEngine.setMetronome(true);
+        await startPlayback();
+        await new Promise<void>((resolve) => setTimeout(resolve, barMs));
+        if (!wasMetronome) toneEngine.setMetronome(metronomeOn);
+      }
+      // If no count-in, DO NOT startPlayback here — we start it synchronously below
     }
 
-    const recordStartTime = Tone.getTransport().seconds;
+    // ── Step 3: Arm recorder + start transport back-to-back (no awaits) ───────
+    // Everything async is done. From here, recorder.start() and transport start
+    // happen in the same JS microtask turn — minimising the timing gap.
+    const needsPlay = !stateRef.current.transport.isPlaying;
+
+    // Latency offset: prefer loopback-measured; fall back to outputLatency+baseLatency
+    const streamLatency = measuredLatencyRef.current
+      ?? Math.max(0, (recordCtx.outputLatency ?? 0) + (recordCtx.baseLatency ?? 0));
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunksRef.current.push(event.data);
+    };
+
+    // Fire recorder + transport start synchronously
+    recorder.start(10); // 10ms chunks — tighter buffer window
+    const recordStartTime = Math.max(0, Tone.getTransport().seconds - streamLatency);
+
     activeRecordingRef.current = {
       trackId,
       startSec: recordStartTime,
       stopSec: null,
       mimeType,
     };
-    recorder.start(100);
+
+    if (needsPlay) {
+      // startPlayback is async but we've already snapped recordStartTime above.
+      // Fire it without await so the UI isn't blocked.
+      void startPlayback();
+    }
 
     dispatch({
       type: "SET_RECORDING_STATE",
@@ -293,7 +431,7 @@ export default function DAWView() {
         recordStartTime,
       },
     });
-  }, [analyze, dispatch, ensureRecordTrack, startPlayback, syncMonitorRouting]);
+  }, [analyze, dispatch, ensureRecordTrack, metronomeOn, startPlayback, syncMonitorRouting]);
 
   const handleRecord = useCallback(() => {
     if (stateRef.current.recording.isRecording) {
@@ -362,7 +500,7 @@ export default function DAWView() {
         <span className="font-mono text-[9px] uppercase tracking-widest text-[#1A1A1A]/40 animate-pulse">
           ◌ Analyzing…
         </span>
-      ) : analysis ? (
+      ) : analysis && !analysis.error ? (
         <>
           <div className="border-2 border-[#1A1A1A] bg-[#FDFDFB] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] px-2 py-0.5 font-mono text-[10px] font-bold">
             {analysis.bpm} BPM
@@ -370,11 +508,6 @@ export default function DAWView() {
           <div className="border-2 border-[#1A1A1A] bg-[#A8D5A2] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] px-2 py-0.5 font-mono text-[10px] font-bold">
             {analysis.key}
           </div>
-          {analysis.error && (
-            <span className="font-mono text-[9px] text-[#1A1A1A]/30 ml-1">
-              (estimated)
-            </span>
-          )}
         </>
       ) : (
         <span className="font-mono text-[9px] uppercase tracking-widest text-[#1A1A1A]/20">
@@ -410,8 +543,16 @@ export default function DAWView() {
           payload: { monitorEnabled: !state.recording.monitorEnabled },
         })
       }
-      mixerOpen={mixerOpen}
-      onToggleMixer={() => setMixerOpen((value) => !value)}
+      mixerOpen={!state.kidsMode && mixerOpen}
+      onToggleMixer={() => setMixerOpen((value) => (state.kidsMode ? false : !value))}
+      kidsMode={state.kidsMode}
+      metronomeOn={metronomeOn}
+      onToggleMetronome={handleToggleMetronome}
+      countInOn={countInOn}
+      onToggleCountIn={() => setCountInOn((v) => !v)}
+      calibrating={calibrating}
+      calibratedMs={calibratedMs}
+      onCalibrate={handleCalibrate}
     />
   );
 
@@ -422,6 +563,28 @@ export default function DAWView() {
       onPatternChange={(patch: Partial<DrumPattern>) => dispatch({ type: "SET_DRUM_PATTERN", payload: patch })}
     />
   ) : null;
+
+  const handleKidsPrompt = useCallback(async (prompt: string, title?: string) => {
+    try {
+      await toneEngine.init();
+    } catch {
+      // Keep the kids surface responsive even if Tone.init fails once.
+    }
+
+    window.dispatchEvent(new CustomEvent("wonder-kids-prompt", {
+      detail: { prompt, title, autoplay: true, playFromStart: true },
+    }));
+  }, []);
+
+  if (state.kidsMode) {
+    return (
+      <div className="flex-1 flex flex-col overflow-hidden bg-[#FFFBEB]">
+        <KidsModeStage
+          onPrompt={handleKidsPrompt}
+        />
+      </div>
+    );
+  }
 
   // ─── Empty state ─────────────────────────────────────────────────────────────
 
@@ -459,7 +622,7 @@ export default function DAWView() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-[#F8F8F4]">
       {/* Live waveform visualizer — visible when playing */}
-      {state.transport.isPlaying && (
+      {state.transport.isPlaying && !state.kidsMode ? (
         <div className="h-8 bg-[#1C1C1C] border-b border-white/5 flex items-center px-4 shrink-0">
           <span className="font-mono text-[8px] font-bold uppercase tracking-widest text-white/20 mr-3 shrink-0">● LIVE</span>
           <ToneWaveformViz
@@ -470,13 +633,14 @@ export default function DAWView() {
             className="flex-1 opacity-70"
           />
         </div>
-      )}
+      ) : null}
       <div className="flex-1 flex overflow-hidden">
         <DAWTrackList
           tracks={state.tracks}
           blocks={state.blocks}
           recordingTrackId={state.recording.armedTrackId}
           isRecording={state.recording.isRecording}
+          kidsMode={state.kidsMode}
           onAddTrack={handleAddTrack}
           onUpdateTrack={handleUpdateTrack}
           onDeleteTrack={(id) => dispatch({ type: "DELETE_TRACK", payload: id })}
@@ -490,7 +654,9 @@ export default function DAWView() {
           recording={state.recording}
           loop={state.loop}
           gridSize={state.gridSize}
+          kidsMode={state.kidsMode}
           selectedBlockId={state.selectedBlockId}
+          sampleLibrary={state.sampleLibrary}
           onSeek={seekTo}
           onUpdateBlock={(id, patch) =>
             dispatch({ type: "UPDATE_BLOCK", payload: { id, ...patch } })
@@ -512,12 +678,14 @@ export default function DAWView() {
           }
         />
       </div>
-      <MixerDrawer
-        open={mixerOpen}
-        tracks={state.tracks}
-        onClose={() => setMixerOpen(false)}
-        onUpdateTrack={handleUpdateTrack}
-      />
+      {state.kidsMode ? null : (
+        <MixerDrawer
+          open={mixerOpen}
+          tracks={state.tracks}
+          onClose={() => setMixerOpen(false)}
+          onUpdateTrack={handleUpdateTrack}
+        />
+      )}
       {drumRack}
       {analysisBadge}
       {transportBar}

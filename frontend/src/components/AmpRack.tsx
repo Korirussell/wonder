@@ -234,10 +234,12 @@ function VUMeter({ active }: { active: boolean }) {
 interface AmpRackProps { onClose: () => void; }
 
 export default function AmpRack({ onClose }: AmpRackProps) {
-  const [active,   setActive]   = useState(false);
-  const [preset,   setPreset]   = useState(0);
-  const [error,    setError]    = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
+  const [active,    setActive]   = useState(false);
+  const [preset,    setPreset]   = useState(0);
+  const [error,     setError]    = useState<string | null>(null);
+  const [starting,  setStarting] = useState(false);
+  const [devices,   setDevices]  = useState<MediaDeviceInfo[]>([]);
+  const [deviceId,  setDeviceId] = useState<string | undefined>(undefined);
 
   // Knob state — initialised from PRESETS[0]
   const [gain,     setGain]     = useState(PRESETS[0].gain);
@@ -265,6 +267,21 @@ export default function AmpRack({ onClose }: AmpRackProps) {
     setPresence(p.presence); setReverb(p.reverb);
   };
 
+  // Enumerate inputs once on mount (labels only available after first permission grant,
+  // so we also re-enumerate after the amp starts successfully)
+  const refreshDevices = useCallback(async () => {
+    try {
+      const list = await toneEngine.listAudioInputs();
+      setDevices(list);
+      // Auto-select current deviceId if it still exists, else keep undefined (browser default)
+      if (deviceId && !list.find((d) => d.deviceId === deviceId)) {
+        setDeviceId(undefined);
+      }
+    } catch { /* permissions not yet granted — silently ignore */ }
+  }, [deviceId]);
+
+  useEffect(() => { void refreshDevices(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
   const togglePower = async () => {
     setError(null);
     if (active) {
@@ -273,8 +290,10 @@ export default function AmpRack({ onClose }: AmpRackProps) {
     } else {
       setStarting(true);
       try {
-        await toneEngine.startAmp();
+        await toneEngine.startAmp(deviceId);
         setActive(true);
+        // Re-enumerate now that permission was granted — labels become readable
+        await refreshDevices();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Mic access denied");
       } finally {
@@ -419,10 +438,47 @@ export default function AmpRack({ onClose }: AmpRackProps) {
           </div>
         </div>
 
+        {/* Input device picker */}
+        <div className="px-5 pb-4">
+          <div className="flex items-center gap-2">
+            <label className="font-mono text-[7px] uppercase tracking-[0.18em] text-white/25 shrink-0">
+              Input
+            </label>
+            <select
+              value={deviceId ?? ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                setDeviceId(val === "" ? undefined : val);
+                // If amp is running, restart with new device
+                if (active) {
+                  toneEngine.stopAmp();
+                  setActive(false);
+                  setError(null);
+                }
+              }}
+              className="flex-1 bg-[#1A1A1A] border border-white/10 rounded-md px-2 py-1 font-mono text-[9px] text-white/60 focus:outline-none focus:border-white/25 truncate"
+            >
+              <option value="">Default (system input)</option>
+              {devices.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.label || `Input ${devices.indexOf(d) + 1}`}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={refreshDevices}
+              className="font-mono text-[8px] text-white/25 hover:text-white/50 transition-colors px-1 shrink-0"
+              title="Refresh device list"
+            >
+              ↺
+            </button>
+          </div>
+        </div>
+
         {/* Footer */}
         <div className="px-5 py-3 border-t border-white/[0.06] flex items-center justify-between">
           <p className="font-mono text-[7px] text-white/15 uppercase tracking-widest">
-            Plug guitar into your audio interface · select it as mic input
+            Plug guitar into your audio interface · select line 2 above
           </p>
           <div className="flex gap-1">
             {["●", "●", "●"].map((d, i) => (

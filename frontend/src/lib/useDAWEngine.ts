@@ -111,16 +111,31 @@ export function useDAWEngine({ state, dispatch }: UseDAWEngineProps): DAWEngineR
         toneEngine.loadStemFromBlob(track.id, track.name, track.audioBlob, loopConfig)
           .then(() => {
             const durationSec = toneEngine.getStemDuration(track.id);
-            if (
-              typeof durationSec === "number" &&
-              Number.isFinite(durationSec) &&
-              Math.abs((stateRef.current.tracks.find((t) => t.id === track.id)?.audioDurationSec ?? 0) - durationSec) > 0.01
-            ) {
+            if (typeof durationSec !== "number" || !Number.isFinite(durationSec)) return;
+
+            // Update audioDurationSec on the track
+            if (Math.abs((stateRef.current.tracks.find((t) => t.id === track.id)?.audioDurationSec ?? 0) - durationSec) > 0.01) {
               dispatch({
                 type: "UPDATE_TRACK",
                 payload: { id: track.id, audioDurationSec: durationSec },
               });
             }
+
+            // Sync durationMeasures on all non-sliced blocks for this track to the
+            // actual buffer duration so visual width matches real audio length.
+            const bpm = stateRef.current.transport.bpm;
+            const spm = (4 * 60) / bpm;
+            const accurateDurationMeasures = durationSec / spm;
+            stateRef.current.blocks
+              .filter((b) => b.trackId === track.id && !b.bufferOffsetSec)
+              .forEach((b) => {
+                if (Math.abs(b.durationMeasures - accurateDurationMeasures) > 0.01) {
+                  dispatch({
+                    type: "UPDATE_BLOCK",
+                    payload: { id: b.id, durationMeasures: accurateDurationMeasures },
+                  });
+                }
+              });
           })
           .catch(() => {
             console.warn(`[useDAWEngine] Failed to load stem: ${track.name}`);

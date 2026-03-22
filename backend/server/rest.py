@@ -373,6 +373,8 @@ class GenerateLoopRequest(BaseModel):
     loop: bool = True
 
 
+_LOOP_SUFFIX = ", seamless continuous 2-bar musical loop, consistent tempo, full arrangement, no fade out"
+
 @app.post("/generate-loop")
 async def generate_loop(body: GenerateLoopRequest) -> dict[str, Any]:
     """
@@ -380,9 +382,10 @@ async def generate_loop(body: GenerateLoopRequest) -> dict[str, Any]:
     Compatible with the frontend /api/generate-loop proxy route.
     """
     try:
+        loop_prompt = body.prompt.rstrip() + _LOOP_SUFFIX
         result = handle_generate(
-            body.prompt,
-            duration_seconds=body.duration_seconds,
+            loop_prompt,
+            duration_seconds=6.0,
             category="musical",
         )
     except Exception as exc:

@@ -11,6 +11,8 @@ import {
   Grid3X3,
   Wand2,
   SlidersHorizontal,
+  Music2,
+  Timer,
 } from "lucide-react";
 import type { DAWTransport } from "@/types";
 
@@ -31,6 +33,14 @@ interface DAWTransportBarProps {
   onToggleMonitor?: () => void;
   mixerOpen?: boolean;
   onToggleMixer?: () => void;
+  kidsMode?: boolean;
+  metronomeOn?: boolean;
+  onToggleMetronome?: () => void;
+  countInOn?: boolean;
+  onToggleCountIn?: () => void;
+  calibrating?: boolean;
+  calibratedMs?: number | null;
+  onCalibrate?: () => void;
 }
 
 export function DAWTransportBar({
@@ -50,6 +60,14 @@ export function DAWTransportBar({
   onToggleMonitor,
   mixerOpen = false,
   onToggleMixer,
+  kidsMode = false,
+  metronomeOn = false,
+  onToggleMetronome,
+  countInOn = false,
+  onToggleCountIn,
+  calibrating = false,
+  calibratedMs = null,
+  onCalibrate,
 }: DAWTransportBarProps) {
   const measure = Math.floor(transport.currentMeasure);
   const positionStr = `${String(measure).padStart(2, "0")}.01.128`;
@@ -120,6 +138,49 @@ export function DAWTransportBar({
           title={monitorEnabled ? "Disable input monitoring" : "Enable input monitoring"}
         >
           Mon
+        </button>
+
+        {/* Metronome */}
+        <button
+          onClick={onToggleMetronome}
+          className={`w-8 h-8 flex items-center justify-center transition-colors rounded-sm ${
+            metronomeOn
+              ? "bg-[#9945FF]/20 text-[#9945FF]"
+              : "text-[#888] hover:text-[#ccc] hover:bg-white/6"
+          }`}
+          title={metronomeOn ? "Metronome on" : "Metronome off"}
+        >
+          <Music2 size={13} strokeWidth={1.5} />
+        </button>
+
+        {/* Count-in */}
+        <button
+          onClick={onToggleCountIn}
+          className={`flex items-center gap-1 px-2 py-1 rounded-sm border-2 font-mono text-[8px] font-bold uppercase tracking-widest transition-colors ${
+            countInOn
+              ? "bg-[#FB923C]/20 border-[#FB923C]/50 text-[#FB923C]"
+              : "border-[#444] text-[#888] hover:text-white hover:border-[#666]"
+          }`}
+          title={countInOn ? "Count-in: 1 bar before recording" : "Count-in off"}
+        >
+          <Timer size={10} strokeWidth={1.8} />
+          1
+        </button>
+
+        {/* Latency calibration */}
+        <button
+          onClick={onCalibrate}
+          disabled={calibrating}
+          className={`flex items-center gap-1 px-2 py-1 rounded-sm border-2 font-mono text-[8px] font-bold uppercase tracking-widest transition-colors disabled:opacity-40 ${
+            calibratedMs !== null && calibratedMs >= 0
+              ? "border-[#14F195]/40 text-[#14F195]"
+              : calibratedMs === -1
+              ? "border-red-500/40 text-red-400"
+              : "border-[#444] text-[#888] hover:text-white hover:border-[#666]"
+          }`}
+          title="Measure recording latency via loopback (play a click → record → find offset). Keep speakers on."
+        >
+          {calibrating ? "…" : calibratedMs !== null && calibratedMs >= 0 ? `${calibratedMs}ms` : calibratedMs === -1 ? "err" : "CAL"}
         </button>
       </div>
 
@@ -206,18 +267,20 @@ export function DAWTransportBar({
           Export
         </button>
 
-        <button
-          onClick={onToggleMixer}
-          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-sm font-mono text-[9px] font-bold uppercase tracking-widest border-2 transition-colors ${
-            mixerOpen
-              ? "bg-[#C1E1C1] border-[#C1E1C1] text-[#1A1A1A]"
-              : "bg-[#2c2c2c] border-[#3e3e3e] text-[#666] hover:text-[#bbb] hover:border-[#555]"
-          }`}
-          title="Toggle mixer"
-        >
-          <SlidersHorizontal size={11} strokeWidth={1.5} />
-          Mixer
-        </button>
+        {kidsMode ? null : (
+          <button
+            onClick={onToggleMixer}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-sm font-mono text-[9px] font-bold uppercase tracking-widest border-2 transition-colors ${
+              mixerOpen
+                ? "bg-[#C1E1C1] border-[#C1E1C1] text-[#1A1A1A]"
+                : "bg-[#2c2c2c] border-[#3e3e3e] text-[#666] hover:text-[#bbb] hover:border-[#555]"
+            }`}
+            title="Toggle mixer"
+          >
+            <SlidersHorizontal size={11} strokeWidth={1.5} />
+            Mixer
+          </button>
+        )}
       </div>
 
       {/* BPM — visible on hover */}

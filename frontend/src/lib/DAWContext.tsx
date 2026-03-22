@@ -30,7 +30,8 @@ type DAWAction =
   | { type: "ADD_TO_LIBRARY"; payload: SampleLibraryEntry }
   | { type: "SET_RECORDING_STATE"; payload: Partial<DAWRecordingState> }
   | { type: "SET_LOOP_STATE"; payload: Partial<DAWLoopState> }
-  | { type: "SET_GRID_SIZE"; payload: DAWGridSize };
+  | { type: "SET_GRID_SIZE"; payload: DAWGridSize }
+  | { type: "SET_KIDS_MODE"; payload: boolean };
 
 // ─── Initial State ────────────────────────────────────────────────────────────
 
@@ -52,6 +53,7 @@ const initialState: DAWState = {
     loopEnd: (4 * 4 * 60) / 85,
   },
   gridSize: 16,
+  kidsMode: false,
   drumPattern: {
     kick:    [false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false],
     snare:   [false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false],
@@ -165,6 +167,12 @@ function dawReducer(state: DAWState, action: DAWAction): DAWState {
       return {
         ...state,
         gridSize: action.payload,
+      };
+
+    case "SET_KIDS_MODE":
+      return {
+        ...state,
+        kidsMode: action.payload,
       };
 
     default:

@@ -169,4 +169,5 @@ export interface DAWState {
   recording: DAWRecordingState;
   loop: DAWLoopState;
   gridSize: DAWGridSize;
+  kidsMode: boolean;
 }

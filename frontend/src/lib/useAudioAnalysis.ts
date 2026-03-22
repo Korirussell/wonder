@@ -28,9 +28,9 @@ export function useAudioAnalysis() {
       setAnalysis(data);
       return data;
     } catch {
-      const fallback: AudioAnalysis = { bpm: 90, key: "C Major", error: "fetch-failed" };
-      setAnalysis(fallback);
-      return fallback;
+      // Backend unreachable — leave analysis null so we don't show fake values
+      setAnalysis(null);
+      return null;
     } finally {
       setAnalyzing(false);
     }

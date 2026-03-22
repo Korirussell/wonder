@@ -74,6 +74,14 @@ function GeneratedSoundCard({ sound }: { sound: GeneratedSound }) {
 
 const DAW_TRACK_COLORS = ["#C1E1C1","#E9D5FF","#FEF08A","#FCA5A5","#BAE6FD","#DDD6FE","#BBF7D0","#FED7AA"];
 
+interface SendMessageOptions {
+  autoplay?: boolean;
+  playFromStart?: boolean;
+  kidsTitle?: string;
+}
+
+type KidsStatusState = "idle" | "working" | "playing" | "error";
+
 // ─── Tap helpers ──────────────────────────────────────────────────────────────
 
 interface TapNote { startMs: number; durationMs: number; }
@@ -413,6 +421,7 @@ export default function CopilotChat() {
             }
 
             const genResult = await genResp.json() as { audio_base64: string; duration_seconds: number };
+            const actualDurationSec = genResult.duration_seconds ?? durationSec;
             const audioUrl   = "data:audio/mp3;base64," + genResult.audio_base64;
 
             // base64 → Blob (for DAW timeline waveform + LOAD_AUDIO dispatch)
@@ -427,14 +436,17 @@ export default function CopilotChat() {
             dawDispatch({ type: "ADD_TRACK", payload: {
               id: trackId, name: args.trackName as string, color,
               muted: false, volume: 80,
-              loop: isLoop, loopBars: bars, loopDurationSec: durationSec,
+              loop: isLoop, loopBars: bars, loopDurationSec: actualDurationSec,
             }});
             dawDispatch({ type: "LOAD_AUDIO",  payload: { trackId, blob: audioBlob } });
+            // Clip width derived from actual returned duration, not requested bars
+            const secondsPerMeasure = (4 * 60) / bpm;
+            const actualMeasures = Math.max(0.25, Math.ceil((actualDurationSec / secondsPerMeasure) * 4) / 4);
             dawDispatch({ type: "ADD_BLOCK",   payload: {
               id: crypto.randomUUID(), trackId,
               name:             args.trackName as string,
               startMeasure:     (args.startMeasure as number) ?? 1,
-              durationMeasures: bars,
+              durationMeasures: actualMeasures,
             }});
 
             // Add to Browse library + local sounds panel
@@ -446,7 +458,7 @@ export default function CopilotChat() {
               createdAt: Date.now(),
             }});
 
-            result = `Loop "${args.trackName}" placed: ${bars} bars at ${Math.round(bpm)} BPM (${durationSec.toFixed(1)}s)${isLoop ? ", looping" : ""}`;
+            result = `Loop "${args.trackName}" placed: ${bars} bars at ${Math.round(bpm)} BPM (${actualDurationSec.toFixed(1)}s)${isLoop ? ", looping" : ""}`;
           } catch (e) {
             result = `generateLoop failed: ${e}`;
           } finally {
@@ -476,6 +488,31 @@ export default function CopilotChat() {
   const isLoading = status === "streaming" || status === "submitted";
   const isAiAuraActive = isGeneratingAudio || isLoading || isAgenticRunning;
 
+  const emitKidsStatus = (detail: {
+    state: KidsStatusState;
+    title?: string;
+    message: string;
+    accent?: string;
+  }) => {
+    window.dispatchEvent(new CustomEvent("wonder-kids-status", { detail }));
+  };
+
+  const maybeAutoplay = async (options?: SendMessageOptions) => {
+    if (!options?.autoplay) return false;
+
+    const win = window as unknown as Record<string, unknown>;
+    const playFromStart = options.playFromStart ? win.__wonderPlayFromStart : undefined;
+
+    if (typeof playFromStart !== "function") return false;
+
+    try {
+      await (playFromStart as () => Promise<void>)();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   // Auto-scroll on new messages
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isLoading]);
 
@@ -494,9 +531,20 @@ export default function CopilotChat() {
   const AUDIO_INTENT_RE = /\b(generate|sound|beat|loop|create|make|sample|drum|bass|pad|melody|chord|music)\b/i;
   const AGENTIC_MIX_RE = /\b(mix the tracks|auto-level|balance)\b/i;
 
-  const sendMessage = async (overrideText?: string) => {
+  const sendMessage = async (overrideText?: string, options?: SendMessageOptions) => {
     const text = overrideText ?? input.trim();
-    if (!text || isLoading || isGeneratingAudio) return;
+    if (!text) return;
+
+    if (isLoading || isGeneratingAudio) {
+      if (options?.kidsTitle) {
+        emitKidsStatus({
+          state: "working",
+          title: options.kidsTitle,
+          message: "Wonder is still building the last loop. Tap again in a second.",
+        });
+      }
+      return;
+    }
 
     // Inject Spotify taste into every prompt if connected
     let spotifyPrefix = "";
@@ -694,9 +742,6 @@ export default function CopilotChat() {
         ];
 
         const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
-        const pickN = <T,>(arr: T[], n: number): T[] =>
-          [...arr].sort(() => Math.random() - 0.5).slice(0, n);
-
         // bpm is optional — single-track drops keep whatever BPM is already set
         let scenario: { bpm?: number; reply: string; tracks: DemoTrackDef[] };
 
@@ -809,6 +854,17 @@ export default function CopilotChat() {
             ),
           );
 
+          if (options?.kidsTitle) {
+            const played = await maybeAutoplay(options);
+            emitKidsStatus({
+              state: played ? "playing" : "error",
+              title: options.kidsTitle,
+              message: played
+                ? `${options.kidsTitle} is playing now. Tap another friend to add more music.`
+                : "I built the loop, but playback did not start cleanly. Tap the block one more time.",
+            });
+          }
+
           setIsGeneratingAudio(false);
         }, 1500);
 
@@ -838,6 +894,7 @@ export default function CopilotChat() {
       // Race direct fetch against a 10s hard timeout
       const doGenerate = async (): Promise<string> => {
         let audioBlob: Blob | null = null;
+        let didLoadAudio = false;
 
         try {
           const r = await fetch("/api/generate-sample", {
@@ -869,9 +926,30 @@ export default function CopilotChat() {
           dawDispatch({ type: "ADD_TRACK", payload: { id: trackId, name: trackName, color, muted: false, volume: 80 } });
           dawDispatch({ type: "LOAD_AUDIO", payload: { trackId, blob: audioBlob } });
           dawDispatch({ type: "ADD_BLOCK", payload: { id: crypto.randomUUID(), trackId, name: trackName, startMeasure: 1, durationMeasures: 4 } });
+          didLoadAudio = true;
+        }
+
+        if (didLoadAudio) {
+          if (options?.kidsTitle) {
+            const played = await maybeAutoplay(options);
+            emitKidsStatus({
+              state: played ? "playing" : "error",
+              title: options.kidsTitle,
+              message: played
+                ? `${options.kidsTitle} is playing now. Tap another friend to stack a new sound.`
+                : "I made the sound, but it did not start cleanly. Tap the friend again.",
+            });
+          }
           return "Audio generated and loaded into your session!";
         }
 
+        if (options?.kidsTitle) {
+          emitKidsStatus({
+            state: "error",
+            title: options.kidsTitle,
+            message: "That sound took too long. Try a different animal block.",
+          });
+        }
         return "Generation timed out, but I loaded a fallback sample into your library.";
       };
 
@@ -882,6 +960,14 @@ export default function CopilotChat() {
       const reply = await Promise.race([doGenerate(), timeoutPromise]).catch(
         () => "Generation timed out, but I loaded a fallback sample into your library.",
       );
+
+      if (options?.kidsTitle && reply.startsWith("Generation timed out")) {
+        emitKidsStatus({
+          state: "error",
+          title: options.kidsTitle,
+          message: "That sound took too long. Try a different animal block.",
+        });
+      }
 
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),
@@ -897,6 +983,37 @@ export default function CopilotChat() {
     // Normal AI-streaming path
     await chatSendMessage({ text: fullText });
   };
+
+  const sendMessageRef = useRef(sendMessage);
+  sendMessageRef.current = sendMessage;
+
+  useEffect(() => {
+    const handleKidsPrompt = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        prompt?: string;
+        title?: string;
+        autoplay?: boolean;
+        playFromStart?: boolean;
+      }>;
+      const prompt = customEvent.detail?.prompt?.trim();
+      if (!prompt) return;
+
+      emitKidsStatus({
+        state: "working",
+        title: customEvent.detail?.title ?? "Wonder",
+        message: `Making ${customEvent.detail?.title ?? "music"} for you now.`,
+      });
+
+      void sendMessageRef.current(prompt, {
+        autoplay: customEvent.detail?.autoplay ?? true,
+        playFromStart: customEvent.detail?.playFromStart ?? true,
+        kidsTitle: customEvent.detail?.title,
+      });
+    };
+
+    window.addEventListener("wonder-kids-prompt", handleKidsPrompt as EventListener);
+    return () => window.removeEventListener("wonder-kids-prompt", handleKidsPrompt as EventListener);
+  }, []);
 
   // ── Audio recording ────────────────────────────────────────────────────────
 

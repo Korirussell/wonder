@@ -53,7 +53,7 @@ class ElevenLabsService:
         if not self.config.api_key:
             raise ValueError("Missing ELEVENLABS_API_KEY in the environment")
 
-        clamped_duration = min(5.0, max(0.5, float(duration_seconds)))
+        clamped_duration = min(22.0, max(0.5, float(duration_seconds)))
         chosen_format = output_format or self.config.output_format
         payload = {
             "text": prepared_prompt,

@@ -247,16 +247,31 @@ export default function Header() {
   const [v2Tooltip, setV2Tooltip]       = useState<"mastering" | "stems" | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const { state } = useDAWContext();
+  const { state, dispatch } = useDAWContext();
+  const kidsMode = state.kidsMode;
   const session = { bpm: state.transport.bpm, key: "F Minor" };
   const navRef = useRef<HTMLElement>(null);
   const lastTransientRef = useRef(0);
   const rafRef = useRef(0);
 
+  useEffect(() => {
+    const root = document.documentElement;
+    if (kidsMode) {
+      root.setAttribute("data-theme", "kids");
+    } else {
+      root.removeAttribute("data-theme");
+    }
+
+    return () => {
+      root.removeAttribute("data-theme");
+    };
+  }, [kidsMode]);
+
   // Transient detection — bounces header + rumbles screen only on loud audio peaks
   useEffect(() => {
     const THRESHOLD = 0.65; // peak amplitude required to trigger (0–1)
     const COOLDOWN_MS = 380; // min ms between triggers
+    const navEl = navRef.current;
 
     function tick() {
       rafRef.current = requestAnimationFrame(tick);
@@ -273,7 +288,7 @@ export default function Header() {
         lastTransientRef.current = Date.now();
 
         // Header bounce
-        const nav = navRef.current;
+        const nav = navEl;
         if (nav) {
           nav.classList.remove("wonder-transient-bounce");
           void nav.offsetWidth; // force reflow to restart animation
@@ -291,7 +306,7 @@ export default function Header() {
     return () => {
       cancelAnimationFrame(rafRef.current);
       // Clean up any lingering animation classes on unmount
-      navRef.current?.classList.remove("wonder-transient-bounce");
+      navEl?.classList.remove("wonder-transient-bounce");
       document.documentElement.classList.remove("wonder-screen-rumble");
     };
   }, []);
@@ -374,12 +389,25 @@ export default function Header() {
     <>
       <nav
         ref={navRef}
-        className="flex-shrink-0 flex items-center px-5 h-[44px] bg-[#FDFDFB] border-b-2 border-[#1A1A1A] z-[60] relative gap-3 origin-top will-change-transform"
+        className={`flex-shrink-0 flex items-center px-5 h-[44px] border-b-2 z-[60] relative gap-3 origin-top will-change-transform transition-colors ${
+          kidsMode
+            ? "bg-[#FFF4D8] border-[#F472B6]"
+            : "bg-[#FDFDFB] border-[#1A1A1A]"
+        }`}
       >
         {/* Centered WONDER wordmark */}
         <div className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 pointer-events-none select-none">
-          <span className="font-black uppercase tracking-widest text-[#1A1A1A]" style={{ fontFamily: "system-ui, Impact, 'Arial Black', sans-serif", fontSize: 22, letterSpacing: 4 }}>
-            WONDER
+          <span
+            className={`font-black uppercase text-[#1A1A1A] transition-all ${kidsMode ? "tracking-[0.24em]" : "tracking-widest"}`}
+            style={{
+              fontFamily: kidsMode
+                ? "'Hiragino Maru Gothic ProN', 'Arial Rounded MT Bold', ui-rounded, system-ui, sans-serif"
+                : "system-ui, Impact, 'Arial Black', sans-serif",
+              fontSize: kidsMode ? 20 : 22,
+              letterSpacing: kidsMode ? 3 : 4,
+            }}
+          >
+            {kidsMode ? "WONDER KIDS" : "WONDER"}
           </span>
         </div>
 
@@ -387,66 +415,77 @@ export default function Header() {
         <div ref={menuRef} className="flex items-center gap-0.5">
 
           {/* File */}
-          <div className="relative">
-            <button
-              onClick={() => setOpenMenu(openMenu === "file" ? null : "file")}
-              className={`flex items-center gap-1 px-3 py-1 text-[12px] rounded-sm transition-colors font-mono font-bold uppercase tracking-wide ${
-                openMenu === "file"
-                  ? "bg-[#1A1A1A] text-white"
-                  : "text-[#1A1A1A]/50 hover:text-[#1A1A1A] hover:bg-[#F0F0EB]"
-              }`}
-            >
-              File
-              <ChevronDown
-                size={10}
-                strokeWidth={2.5}
-                className={`transition-transform ${openMenu === "file" ? "rotate-180" : ""}`}
-              />
-            </button>
-            {openMenu === "file" && <DropdownMenu items={fileItems} />}
-          </div>
+          {kidsMode ? null : (
+            <div className="relative">
+              <button
+                onClick={() => setOpenMenu(openMenu === "file" ? null : "file")}
+                className={`flex items-center gap-1 px-3 py-1 text-[12px] rounded-sm transition-colors font-mono font-bold uppercase tracking-wide ${
+                  openMenu === "file"
+                    ? "bg-[#1A1A1A] text-white"
+                    : "text-[#1A1A1A]/50 hover:text-[#1A1A1A] hover:bg-[#F0F0EB]"
+                }`}
+              >
+                File
+                <ChevronDown
+                  size={10}
+                  strokeWidth={2.5}
+                  className={`transition-transform ${openMenu === "file" ? "rotate-180" : ""}`}
+                />
+              </button>
+              {openMenu === "file" ? <DropdownMenu items={fileItems} /> : null}
+            </div>
+          )}
 
           {/* Agent */}
-          <div className="relative">
-            <button
-              onClick={() => setOpenMenu(openMenu === "agent" ? null : "agent")}
-              className={`flex items-center gap-1.5 px-3 py-1 text-[12px] rounded-sm transition-colors font-mono font-bold uppercase tracking-wide ${
-                openMenu === "agent"
-                  ? "bg-[#1A1A1A] text-white"
-                  : "text-[#1A1A1A]/50 hover:text-[#1A1A1A] hover:bg-[#F0F0EB]"
-              }`}
-            >
-              <Sparkles size={10} strokeWidth={2} />
-              Agent
-              <ChevronDown
-                size={10}
-                strokeWidth={2.5}
-                className={`transition-transform ${openMenu === "agent" ? "rotate-180" : ""}`}
-              />
-            </button>
-            {openMenu === "agent" && (
-              <div className="absolute top-full left-0 mt-1 z-50 min-w-[210px] bg-[#FDFDFB] border-2 border-[#1A1A1A] rounded-xl shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] py-1 overflow-visible">
-                {agentItems.map((item, i) => (
-                  <div key={i} className="relative">
-                    {item.divider && i > 0 && <div className="h-px bg-[#1A1A1A]/10 mx-3 my-1" />}
-                    <button
-                      onClick={item.action}
-                      className="w-full flex items-center justify-between px-4 py-2 text-left hover:bg-[#F0F0EB] transition-colors group"
-                    >
-                      <span className="font-mono text-[11px] font-bold text-[#1A1A1A]">{item.label}</span>
-                      <span className="font-mono text-[8px] bg-[#E9D5FF] border border-[#1A1A1A] px-1.5 py-0.5 rounded-full text-[#1A1A1A]/60 ml-3">
-                        v2
-                      </span>
-                    </button>
-                    {/* Inline v2 tooltip */}
-                    {v2Tooltip === (item.label === "AI Mastering" ? "mastering" : "stems") && (
-                      <V2Tooltip onClose={() => setV2Tooltip(null)} />
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          {kidsMode ? null : (
+            <div className="relative">
+              <button
+                onClick={() => setOpenMenu(openMenu === "agent" ? null : "agent")}
+                className={`flex items-center gap-1.5 px-3 py-1 text-[12px] rounded-sm transition-colors font-mono font-bold uppercase tracking-wide ${
+                  openMenu === "agent"
+                    ? "bg-[#1A1A1A] text-white"
+                    : "text-[#1A1A1A]/50 hover:text-[#1A1A1A] hover:bg-[#F0F0EB]"
+                }`}
+              >
+                <Sparkles size={10} strokeWidth={2} />
+                Agent
+                <ChevronDown
+                  size={10}
+                  strokeWidth={2.5}
+                  className={`transition-transform ${openMenu === "agent" ? "rotate-180" : ""}`}
+                />
+              </button>
+              {openMenu === "agent" ? (
+                <div className="absolute top-full left-0 mt-1 z-50 min-w-[210px] bg-[#FDFDFB] border-2 border-[#1A1A1A] rounded-xl shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] py-1 overflow-visible">
+                  {agentItems.map((item, i) => (
+                    <div key={i} className="relative">
+                      {item.divider && i > 0 ? <div className="h-px bg-[#1A1A1A]/10 mx-3 my-1" /> : null}
+                      <button
+                        onClick={item.action}
+                        className="w-full flex items-center justify-between px-4 py-2 text-left hover:bg-[#F0F0EB] transition-colors group"
+                      >
+                        <span className="font-mono text-[11px] font-bold text-[#1A1A1A]">{item.label}</span>
+                        <span className="font-mono text-[8px] bg-[#E9D5FF] border border-[#1A1A1A] px-1.5 py-0.5 rounded-full text-[#1A1A1A]/60 ml-3">
+                          v2
+                        </span>
+                      </button>
+                      {v2Tooltip === (item.label === "AI Mastering" ? "mastering" : "stems") ? (
+                        <V2Tooltip onClose={() => setV2Tooltip(null)} />
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {kidsMode ? (
+            <div className="px-3 py-1.5 border-2 border-[#F472B6] bg-[#FDF2F8] shadow-[4px_4px_0px_0px_rgba(244,114,182,0.28)]">
+              <span className="font-bold text-[10px] uppercase tracking-[0.22em] text-[#1A1A1A]" style={{ fontFamily: "'Hiragino Maru Gothic ProN', 'Arial Rounded MT Bold', ui-rounded, system-ui, sans-serif" }}>
+                Playful Studio
+              </span>
+            </div>
+          ) : null}
         </div>
 
         <div className="flex-1" />
@@ -469,7 +508,7 @@ export default function Header() {
           </div>
         </div>
 
-        {/* Amp Rack */}
+        {kidsMode ? null : (
           <button
             onClick={() => setAmpOpen(true)}
             className={`w-[32px] h-[32px] rounded-sm border-2 border-[#1A1A1A] flex items-center justify-center transition-colors shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] ${
@@ -481,6 +520,40 @@ export default function Header() {
           >
             <Guitar size={14} strokeWidth={1.5} />
           </button>
+        )}
+
+        <button
+          onClick={() => {
+            setOpenMenu(null);
+            setAmpOpen(false);
+            setV2Tooltip(null);
+            if (!kidsMode) {
+              const root = document.documentElement;
+              root.classList.remove("wonder-kids-quake");
+              void root.offsetWidth;
+              root.classList.add("wonder-kids-quake");
+              window.setTimeout(() => root.classList.remove("wonder-kids-quake"), 720);
+            }
+            dispatch({ type: "SET_KIDS_MODE", payload: !kidsMode });
+          }}
+          className={`flex h-[36px] items-center justify-center gap-2 border-2 px-4 shadow-[4px_4px_0px_0px_rgba(26,26,26,0.18)] transition-all ${
+            kidsMode
+              ? "border-[#60A5FA] bg-[#EFF6FF]"
+              : "border-[#FACC15] bg-[#FFF7CC]"
+          }`}
+          title={kidsMode ? "Switch to Wonder classic mode" : "Switch to Wonder Kids mode"}
+        >
+          <Sparkles size={13} strokeWidth={2.2} />
+          <span
+            className="inline-flex items-center text-[20px] font-black uppercase leading-none"
+            style={{ fontFamily: "'Hiragino Maru Gothic ProN', 'Arial Rounded MT Bold', ui-rounded, system-ui, sans-serif" }}
+          >
+            <span style={{ color: "#60A5FA", textShadow: "2px 2px 0 rgba(26,26,26,0.12)" }}>K</span>
+            <span style={{ color: "#FACC15", textShadow: "2px 2px 0 rgba(26,26,26,0.12)" }}>I</span>
+            <span style={{ color: "#F43F5E", textShadow: "2px 2px 0 rgba(26,26,26,0.12)" }}>D</span>
+            <span style={{ color: "#FB923C", textShadow: "2px 2px 0 rgba(26,26,26,0.12)" }}>S</span>
+          </span>
+        </button>
 
         {/* Settings */}
           <button
@@ -505,7 +578,7 @@ export default function Header() {
       {settingsOpen && <AudioEngineModal onClose={() => setSettingsOpen(false)} />}
       {profileOpen  && <WonderProfileModal onClose={() => setProfileOpen(false)} />}
       {blinkOpen    && <SolanaBlinkModal onClose={() => setBlinkOpen(false)} />}
-      {ampOpen      && <AmpRack onClose={() => setAmpOpen(false)} />}
+      {ampOpen && !kidsMode ? <AmpRack onClose={() => setAmpOpen(false)} /> : null}
 
       {/* Toast */}
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
