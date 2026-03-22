@@ -351,7 +351,10 @@ function normalizeNotes(notes: unknown): Array<Record<string, unknown>> {
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ content: "GEMINI_API_KEY not set in .env.local" }, { status: 500 });
+    return NextResponse.json(
+      { content: "GEMINI_API_KEY not set — add it to the Wonder repo root `.env` (see `.env.example`)" },
+      { status: 500 }
+    );
   }
 
   try {

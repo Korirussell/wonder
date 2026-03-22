@@ -1,8 +1,19 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Environment variables
+
+The app loads **`.env` / `.env.local` from the Wonder repo root** (`../`), not from `frontend/`. Configure secrets once in **`/wonder/.env`** (copy from `../.env.example`).
+
+Used by API routes / server code:
+
+- **`GEMINI_API_KEY`** — required for `/api/chat`
+- **`ABLETON_HOST`** / **`ABLETON_PORT`** — optional; default `localhost` / `9877` (see main [README.md](../README.md))
+
+`next.config.js` loads `../.env` and `../.env.local` via `dotenv` (Next.js 16 doesn’t support a parent `envDir` in config). Don’t rely on `frontend/.env*` for secrets — use the repo root only.
+
 ## Getting Started
 
-First, run the development server:
+From the `frontend` directory, run the development server:
 
 ```bash
 npm run dev

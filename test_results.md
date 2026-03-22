@@ -1,22 +1,22 @@
 # Wonder — Ableton MCP Test Results
-**Run:** 2026-03-21 03:10  
-**Passed:** 33  **Failed:** 0  
+**Run:** 2026-03-21 15:09  
+**Passed:** 34  **Failed:** 1  
 **Repo:** jpoindexter/ableton-mcp (128 tools)  
 
 
 ## Phase 2 — Connection
 
-- ✅ **get_session_info** — `BPM=120.0, tracks=35, time_sig=4/4`
+- ✅ **get_session_info** — `BPM=120.0, tracks=4, time_sig=4/4`
 - ✅ **set_tempo** — `confirmed=120.0`
 
 ## Phase 3A — Track Creation
 
-- ✅ **create_midi_track + name + vol + pan** — `track_index=35`
-- ✅ **create_audio_track + name** — `track_index=36`
+- ✅ **create_midi_track + name + vol + pan** — `track_index=4`
+- ✅ **create_audio_track + name** — `track_index=5`
 
 ## Phase 3B — MIDI Clip Injection + Humanization
 
-- ✅ **create_clip (8 bars)** — `track=35 clip=0`
+- ✅ **create_clip (8 bars)** — `track=4 clip=0`
 - ✅ **add_notes_to_clip (humanized drum pattern)** — `32 notes with velocity variation`
 - ✅ **get_clip_notes (read-back)** — `got 32 notes back`
 > SKIP humanize_clip_timing/velocity — use deprecated clip.get_notes() API (broken in Live 12)
@@ -25,9 +25,9 @@
 
 ## Phase 3B (bonus) — Built-in Pattern Generators
 
-- ✅ **generate_drum_pattern (house)** — `10 notes`
-- ✅ **generate_drum_pattern (hiphop)** — `12 notes`
-- ✅ **generate_bassline (pentatonic_minor)** — `7 notes`
+- ✅ **generate_drum_pattern (house)** — `16 notes`
+- ✅ **generate_drum_pattern (hiphop)** — `14 notes`
+- ✅ **generate_bassline (pentatonic_minor)** — `9 notes`
 
 ## Phase 3C — Browser + Drum Rack Loading
 
@@ -56,9 +56,9 @@
 
 ## Phase 3F — Scene Management
 
-- ✅ **create_scene** — `{'index': 15, 'name': ''}`
-- ✅ **set_scene_name** — `scene_index=15`
-- ✅ **fire_scene** — `scene 15 fired`
+- ✅ **create_scene** — `{'index': 8, 'name': ''}`
+- ✅ **set_scene_name** — `scene_index=8`
+- ✅ **fire_scene** — `scene 8 fired`
 - ✅ **stop_scene** — `stopped`
 
 ## Phase 3G — Undo, Freeze, Misc
@@ -68,13 +68,13 @@
 - ✅ **get_cpu_load** — `{'cpu_load': None}`
 - ✅ **set_swing_amount** — `0.2 (20% swing)`
 - ✅ **set_metronome** — `off`
-- ✅ **freeze_track** — `track 35`
-- ✅ **flatten_track** — `track 35`
+- ✅ **freeze_track** — `track 4`
+- ✅ **flatten_track** — `track 4`
 
 ## Bonus — Full Humanized Lo-Fi House Demo
 
-- ✅ **create track: Wonder_Drums** — `idx=37`
-- ✅ **create track: Wonder_Bass** — `idx=38`
+- ✅ **create track: Wonder_Drums** — `idx=6`
+- ✅ **create track: Wonder_Bass** — `idx=7`
 - ✅ **set_tempo + swing** — `120bpm, 20% swing`
 - ✅ **Lo-fi drum loop (humanized)** — `16 notes, 12ms timing drift, 6% vel variation`
 - ✅ **Pentatonic minor bass (humanized)** — `7 notes`
@@ -82,8 +82,8 @@
 
 ## Phase 3H — Wonder New Commands
 
-> create_wonder_session — PENDING: Ableton must reload Remote Script (restart Ableton)
-> load_sample_by_path — PENDING: Ableton must reload Remote Script (restart Ableton)
+- ✅ **create_wonder_session** — `{'status': 'created', 'bpm': 88, 'swing': 0.15, 'tracks': [{'index': 8, 'name': `
+- ❌ **load_sample_by_path** — `[Errno 1] Operation not permitted: '/Users/zwest/Music/Ableton/User Library/Samples/Imported/Wonder/Funk.aiff'`
 
 ---
 ## Limitations Summary
@@ -92,4 +92,4 @@
 |---|---|---|
 | load_browser_item (Drum Rack) | ✅ Easy | loaded: Drum Hits |
 | get_browser_items_at_path 'drums/Drum Rack' (kits) | ✅ Easy | 0 kits found |
-| create track: Wonder_Drums | ✅ Easy | idx=37 |
+| create track: Wonder_Drums | ✅ Easy | idx=6 |
