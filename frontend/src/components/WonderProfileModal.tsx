@@ -7,19 +7,42 @@ const GENRES = ["Lo-Fi", "Hip Hop", "House", "Trap", "Jazz", "Afrobeats", "DnB",
 const PLUGINS = ["RC-20", "OTT", "SketchCassette", "Digitalis", "Vulf Compressor", "Serum", "Vital", "Autotune", "Fabfilter Pro-Q", "Drum Buss"];
 const ARTISTS = ["J Dilla", "Flying Lotus", "Kaytranada", "Four Tet", "Sade", "Nujabes", "Tyler the Creator", "Mac Miller"];
 
+function loadFromStorage<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = localStorage.getItem("wonderprofile");
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return (parsed[key] as T) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 interface Props {
   onClose: () => void;
 }
 
 export default function WonderProfileModal({ onClose }: Props) {
-  const [selectedGenres, setSelectedGenres] = useState<string[]>(["Lo-Fi", "Hip Hop"]);
-  const [selectedPlugins, setSelectedPlugins] = useState<string[]>(["RC-20", "OTT", "SketchCassette"]);
-  const [selectedArtists, setSelectedArtists] = useState<string[]>(["J Dilla", "Nujabes"]);
-  const [bpm, setBpm] = useState("80-95");
-  const [defaultKey, setDefaultKey] = useState("A Minor");
+  const [selectedGenres, setSelectedGenres] = useState<string[]>(() => loadFromStorage("genres", ["Lo-Fi", "Hip Hop"]));
+  const [selectedPlugins, setSelectedPlugins] = useState<string[]>(() => loadFromStorage("plugins", ["RC-20", "OTT", "SketchCassette"]));
+  const [selectedArtists, setSelectedArtists] = useState<string[]>(() => loadFromStorage("artists", ["J Dilla", "Nujabes"]));
+  const [bpm, setBpm] = useState<string>(() => loadFromStorage("bpmRange", "80-95"));
+  const [defaultKey, setDefaultKey] = useState<string>(() => loadFromStorage("defaultKey", "A Minor"));
 
   const toggle = (arr: string[], item: string, set: (v: string[]) => void) => {
     set(arr.includes(item) ? arr.filter((x) => x !== item) : [...arr, item]);
+  };
+
+  const handleSave = () => {
+    localStorage.setItem("wonderprofile", JSON.stringify({
+      genres: selectedGenres,
+      plugins: selectedPlugins,
+      artists: selectedArtists,
+      bpmRange: bpm,
+      defaultKey,
+    }));
+    onClose();
   };
 
   return (
@@ -144,7 +167,7 @@ export default function WonderProfileModal({ onClose }: Props) {
             Cancel
           </button>
           <button
-            onClick={onClose}
+            onClick={handleSave}
             className="px-5 py-2.5 bg-[#C1E1C1] border-2 border-[#2D2D2D] rounded-xl text-sm font-bold font-headline hard-shadow interactive-push"
           >
             Save Profile

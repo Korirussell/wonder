@@ -1,27 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Settings } from "lucide-react";
 import WonderProfileModal from "./WonderProfileModal";
+import { useAbleton } from "@/lib/AbletonContext";
 
 export default function Header() {
   const [profileOpen, setProfileOpen] = useState(false);
-  const [connected, setConnected] = useState(false);
-
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const res = await fetch("/api/ableton-state");
-        const data = await res.json();
-        setConnected(data.connected ?? false);
-      } catch {
-        setConnected(false);
-      }
-    };
-    check();
-    const interval = setInterval(check, 3000);
-    return () => clearInterval(interval);
-  }, []);
+  const { connected } = useAbleton();
 
   return (
     <>
