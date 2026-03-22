@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ChevronDown, Paperclip, Mic, Send, StopCircle, Music2, X } from "lucide-react";
+import { useChat } from "@/lib/ChatContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -591,11 +592,11 @@ const INITIAL_MESSAGES: RichMessage[] = [
 ];
 
 export default function CopilotChat() {
+  const { activeChatId, createChat, updateChatPreview } = useChat();
   const [messages, setMessages] = useState<RichMessage[]>(INITIAL_MESSAGES);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const sessionIdRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -622,6 +623,8 @@ export default function CopilotChat() {
   // ── SSE streaming send ────────────────────────────────────────────────────
 
   async function streamChat(payload: Record<string, unknown>) {
+    // Ensure there is an active chat session (creates one if needed)
+    const sessionId = activeChatId ?? (await createChat());
     const assistantId = `asst-${Date.now()}`;
 
     setMessages((prev) => [
@@ -634,12 +637,8 @@ export default function CopilotChat() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, sessionId: sessionIdRef.current }),
+        body: JSON.stringify({ ...payload, sessionId }),
       });
-
-      // Capture session ID for subsequent turns
-      const sid = res.headers.get("x-wonder-session-id");
-      if (sid) sessionIdRef.current = sid;
 
       if (!res.body) throw new Error("No response body");
 
@@ -706,9 +705,17 @@ export default function CopilotChat() {
         )
       );
     } finally {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m))
-      );
+      setMessages((prev) => {
+        const updated = prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m));
+        // Update chat sidebar preview with the last text response
+        const assistantMsg = updated.find((m) => m.id === assistantId);
+        const lastText = assistantMsg?.events
+          ?.filter((e) => e.type === "text")
+          .map((e) => e.text ?? "")
+          .join("") ?? "";
+        if (lastText && sessionId) updateChatPreview(sessionId, lastText);
+        return updated;
+      });
       setIsLoading(false);
     }
   }

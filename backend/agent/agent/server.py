@@ -12,9 +12,9 @@ import asyncio
 import json
 import time
 import uuid
-from typing import Any
+from typing import Any, Optional
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -83,6 +83,7 @@ except ImportError:
 
 class SessionRequest(BaseModel):
     user_id: str = "default_user"
+    session_id: Optional[str] = None  # client may supply a UUID; generated if absent
     state: dict[str, Any] = {}
 
 
@@ -164,6 +165,25 @@ async def _ensure_session(user_id: str, session_id: str) -> None:
         )
 
 
+async def _record_turn(user_id: str, session_id: str, user_text: str, assistant_text: str) -> None:
+    """Append a completed user+assistant exchange to the session state for history restore."""
+    try:
+        session = await session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
+        if session is None:
+            return
+        turns = list((session.state or {}).get("turns", []))
+        if user_text:
+            turns.append({"role": "user", "content": user_text})
+        if assistant_text:
+            turns.append({"role": "assistant", "content": assistant_text})
+        session.state["turns"] = turns
+        await session_service.update_session(session)
+    except Exception as exc:
+        logger.debug("_record_turn failed silently: %s", exc)
+
+
 def _fire_analytics(req: ChatRequest) -> None:
     """Non-blocking analytics emit."""
     try:
@@ -191,15 +211,27 @@ def health() -> dict[str, str]:
 @app.post("/session/new")
 async def new_session(req: SessionRequest) -> dict[str, str]:
     """Create a new persistent session and return its ID."""
-    session_id = str(uuid.uuid4())
+    session_id = req.session_id or str(uuid.uuid4())
     await session_service.create_session(
         app_name=APP_NAME,
         user_id=req.user_id,
         session_id=session_id,
-        state=req.state,
+        state={**req.state, "turns": []},
     )
     logger.info("session created  user=%s  id=%s", req.user_id, session_id)
     return {"session_id": session_id}
+
+
+@app.get("/session/{session_id}")
+async def get_session_turns(session_id: str, user_id: str = "default_user") -> dict[str, Any]:
+    """Return the stored turn history for a session (used to restore chat on reload)."""
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=session_id
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    turns = list((session.state or {}).get("turns", []))
+    return {"session_id": session_id, "turns": turns}
 
 
 @app.post("/chat")
@@ -238,6 +270,7 @@ async def chat(req: ChatRequest) -> dict[str, Any]:
         len(events), len(text), elapsed,
     )
     _fire_analytics(req)
+    asyncio.ensure_future(_record_turn(req.user_id, req.session_id, req.message, text))
     return {"content": text}
 
 
@@ -250,6 +283,7 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
 
     async def event_gen():
         event_count = 0
+        text_parts: list[str] = []
         try:
             async with Aclosing(
                 runner.run_async(
@@ -263,11 +297,20 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
                     event_count += 1
                     log_event(logger, event)
                     yield f"data: {event.model_dump_json(exclude_none=True, by_alias=True)}\n\n"
+                    # Accumulate non-thought text for turn history
+                    if hasattr(event, "content") and event.content:
+                        for part in event.content.parts or []:
+                            if hasattr(part, "text") and part.text and not getattr(part, "thought", False):
+                                text_parts.append(part.text)
         except Exception as exc:
             logger.error("chat/stream error: %s", exc, exc_info=True)
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
         finally:
             logger.info("chat/stream done  events=%d", event_count)
+            if text_parts:
+                asyncio.ensure_future(
+                    _record_turn(req.user_id, req.session_id, req.message, "".join(text_parts))
+                )
 
     _fire_analytics(req)
     return StreamingResponse(event_gen(), media_type="text/event-stream")
