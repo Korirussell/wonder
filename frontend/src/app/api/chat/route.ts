@@ -1,383 +1,190 @@
-import { GoogleGenerativeAI, FunctionCallingMode, type Content } from "@google/generative-ai";
-import Anthropic from "@anthropic-ai/sdk";
-import { NextRequest, NextResponse } from "next/server";
-import { sendAbletonCommand } from "@/lib/ableton";
-import { generateSoundEffect, textToSpeech } from "@/lib/elevenlabs";
-import { WONDER_TOOL_DECLARATIONS } from "@/lib/wonderTools";
-import {
-  createInitialState,
-  updateStateAfterToolCall,
-  type SessionState,
-} from "@/lib/sessionState";
-import { validateBeforeExecution } from "@/lib/musicValidator";
+import { streamText, tool, zodSchema, convertToModelMessages } from "ai";
+import { google } from "@ai-sdk/google";
+import { z } from "zod";
+import { NextRequest } from "next/server";
+import { getProfilePromptBlock } from "@/lib/wonderProfile";
 
-const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
+const SYSTEM_PROMPT = `You are Wonder — an AI music producer in a browser DAW. You build music by calling tools directly. Keep responses to 1-2 sentences max. Be fast and decisive.
 
-interface NotesSummary {
-  note_count: number;
-  pitch_range?: [string, string];
-  duration_beats?: number;
-  first_notes?: string[];
-}
+## Browser DAW Time Model
+- Timeline is measure-based, 1-indexed. Measures snap to 0.25 granularity.
 
-interface MidiContext {
-  midi_id: string;
-  midi_path: string;
-  note_count: number;
-  notes_summary: NotesSummary;
-  suggested_clip_length: number;
-  tempo_bpm: number;
-}
+## Genre BPM Guide
+lo-fi 80-90 | trap 130-150 | house 120-128 | dnb 170-180 | hip-hop 85-95 | drill 140-150
 
-interface RhythmContext {
-  capture_ms: number;
-  reference_bpm: number;
-  timing_confidence: number;
-  quantization_hint: "light" | "medium" | "strong";
-  note_starts_beats: number[];
-  note_durations_beats: number[];
-  output_mode: "new_track";
-}
+## Beat Construction Patterns
+trap: kick on steps 1+9, snare on 5+13, hi-hats all 16 steps
+house: kick every 4 steps (1,5,9,13), snare on 5+13, open hat on 3+11
+lo-fi: kick 1+7, snare 5+13, hi-hats every other step
 
-async function callPythonApi(endpoint: string, args: Record<string, unknown>): Promise<unknown> {
-  const res = await fetch(`${PYTHON_API_URL}${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(args),
-  });
-  if (!res.ok) throw new Error(`Python API error: ${res.status} ${res.statusText}`);
-  return res.json();
-}
+## Workflow
+1. Always call setBPM first
+2. Call setDrumPattern to lay down rhythm (instant, no API needed)
+3. Call generateLoop for backing tracks / chords / bass lines / pads (loops to grid)
+4. Call generateAndPlaceAudio for one-shot FX, single hits, stabs (does NOT loop)
+5. Confirm in 1 sentence
 
-function buildMidiContext(ctx: MidiContext): string {
-  const pitchRange = ctx.notes_summary.pitch_range
-    ? `${ctx.notes_summary.pitch_range[0]} to ${ctx.notes_summary.pitch_range[1]}`
-    : "unknown";
-  return `\nUSER'S HUMMED MELODY (midi_id: ${ctx.midi_id}): ${ctx.note_count} notes, range ${pitchRange}, ${ctx.notes_summary.duration_beats?.toFixed(1)} beats. Call load_midi_notes("${ctx.midi_id}") to get notes array.`;
-}
+## Tool Choice Guide
+- "piano progression", "chord loop", "bass loop", "pad loop", "melody loop" → generateLoop
+- "808 hit", "snare crack", "riser", "one-shot", "stab", "FX" → generateAndPlaceAudio
 
-function buildRhythmContext(ctx: RhythmContext): string {
-  return `\nUSER RHYTHM (${ctx.note_starts_beats.length} notes, ${ctx.reference_bpm} BPM ref, quantization: ${ctx.quantization_hint}). Beat starts: [${ctx.note_starts_beats.slice(0, 32).map(v => v.toFixed(3)).join(", ")}]`;
-}
+## generateLoop Tips
+- description must include: instrument, feel, genre. The frontend injects BPM + key automatically.
+- bars: 4 for short motifs, 8 for longer phrases. Never exceed 8 (22s ElevenLabs cap).
+- isLoop: true (default). Set false only for non-repeating intros/outros.
 
-const WONDER_SYSTEM_PROMPT = `You are Wonder — an AI music producer inside Ableton Live. You build music via tool calls. No lengthy descriptions, only action.
+## Sound Generation Tips
+- Be specific: "deep punchy 808 sub bass hit with long tail decay" not just "bass"
+- Drums: 0.5-1.5s. Pads/melodies: 2-4s
 
-## Rules
-- Call get_session_info first before creating anything — check what tracks exist.
-- Always vary MIDI velocity (never flat). Compose in a defined key. MIDI values 0-127.
-- Keep responses brief — 1-2 sentences after executing.
-- On errors: read the message, fix params, retry once. Don't start over.
+## FX Tool Guide
+- After placing audio, call setTrackFX to shape the sound to the vibe.
+- Or call applyVibeFX with a vibe string to auto-apply FX presets to ALL tracks at once.
+- Use applyVibeFX when user says things like "make it sound more lo-fi", "add some warmth", "make it dreamy", "bedroom pop vibes", "make it gritty", etc.
+- applyVibeFX vibes: "lo-fi" | "dreamy" | "dark" | "bright" | "warm" | "gritty" | "808" | "clean" | "bedroom-pop" | "drill" | "jazz"
+- setTrackFX lets you target one track with exact reverb/distortion/EQ values.
 
-## Instrument Loading — CRITICAL
-Use load_instrument_by_name ONLY. Never call get_browser_items_at_path or search_browser (they crash).
-Valid names: "Wavetable", "Operator", "Analog", "Drift", "Simpler", "Drum Rack", "Electric", "Tension"
+## CRITICAL: Editing Existing Tracks
+- Every user message contains a [Current session tracks: ...] block listing track names and IDs.
+- When the user says "increase reverb on X", "make the Y more distorted", "add more bass to Z", "turn up the reverb", etc. — look up the track by name in [Current session tracks:] and call setTrackFX with that trackId. NEVER generate new audio for these requests.
+- "increase" reverb → set reverb to ~0.5-0.7. "add a little" → ~0.2-0.3. "max out" → 0.9.
+- "add distortion/drive" → set drive 0.3-0.6 + cabEnabled true. "heavy" → 0.7-0.9.
+- If no tracks exist yet, then generate audio as normal.
 
-## Track Creation Sequence
-1. create_midi_track (index: -1)
-2. set_track_name
-3. load_instrument_by_name (track_index, name)
-4. create_clip (track_index, clip_index=0, length in beats)
-5. add_notes_to_clip (track_index, clip_index, notes[])
+## FX Preset Reference
+lo-fi: reverb 0.25, drive 0.15, low +3, mid -2, high -4
+dreamy: reverb 0.65, drive 0, low 0, mid -1, high +2
+dark: reverb 0.3, drive 0.2, low +4, mid -3, high -5
+bright: reverb 0.1, drive 0, low -2, mid +1, high +4
+warm: reverb 0.2, drive 0.1, low +3, mid +1, high -3
+gritty: reverb 0.1, drive 0.55, low +2, mid 0, high -2
+808: reverb 0.15, drive 0.35, low +5, mid -2, high -3
+bedroom-pop: reverb 0.4, drive 0.05, low +1, mid +2, high +1
+drill: reverb 0.05, drive 0.3, low +4, mid -1, high -2
+jazz: reverb 0.35, drive 0, low +2, mid +3, high +1
+clean: reverb 0, drive 0, low 0, mid 0, high 0
 
-## Note Format
-{ pitch: 0-127, start_time: float_beats, duration: float_beats, velocity: 0-127, mute: false }
-Middle C = 60. Humanize: kick=110, snare=100, hats=75, ghost=55.
-
-## Genre BPM
-lo-fi 80-90 | trap 130-150 | house 120-128 | dnb 170-180 | ambient 70-90 | hip-hop 85-95
-
-## Tools
-get_session_info, set_tempo, start_playback, stop_playback
-create_midi_track, set_track_name, set_track_volume, set_track_mute
-create_clip, add_notes_to_clip, get_clip_notes, fire_clip, stop_clip, set_clip_name
-load_instrument_by_name, get_track_devices, set_device_parameter_by_name
-generate_sound_effect(description, duration_seconds), transcribe_audio, load_midi_notes
+${getProfilePromptBlock()}
 `;
 
-const MAX_TOOL_ROUNDS = 10;
+export async function POST(req: NextRequest) {
+  const { messages } = await req.json();
 
-function normalizeNotes(notes: unknown): Array<Record<string, unknown>> {
-  let rawNotes: unknown = notes;
-  if (rawNotes && typeof rawNotes === "object" && !Array.isArray(rawNotes)) {
-    const container = rawNotes as { notes?: unknown; result?: { notes?: unknown } };
-    if (Array.isArray(container.notes)) rawNotes = container.notes;
-    else if (container.result && Array.isArray(container.result.notes)) rawNotes = container.result.notes;
-  }
-  if (!Array.isArray(rawNotes)) return [];
-  return rawNotes.map((n) => {
-    if (Array.isArray(n)) return { pitch: Number(n[0] ?? 60), start_time: Number(n[1] ?? 0), duration: Number(n[2] ?? 0.25), velocity: Number(n[3] ?? 100), mute: Boolean(n[4] ?? false) };
-    if (typeof n === "object" && n !== null) {
-      const o = n as Record<string, unknown>;
-      return { pitch: Number(o.pitch ?? o.note ?? 60), start_time: Number(o.start_time ?? o.start ?? 0), duration: Number(o.duration ?? 0.25), velocity: Number(o.velocity ?? 100), mute: Boolean(o.mute ?? false) };
-    }
-    return { pitch: 60, start_time: 0, duration: 0.25, velocity: 100, mute: false };
-  });
-}
+  const result = streamText({
+    model: google("gemini-2.5-flash"),
+    system: SYSTEM_PROMPT,
+    messages: await convertToModelMessages(messages),
+    tools: {
+      setBPM: tool({
+        description: "Set the DAW tempo in BPM. Always call this first.",
+        inputSchema: zodSchema(z.object({ bpm: z.number().min(20).max(300) })),
+      }),
 
-/** Shared tool executor — same logic regardless of which AI is driving */
-async function executeTool(
-  name: string,
-  args: Record<string, unknown>,
-  sessionState: SessionState
-): Promise<{ result?: unknown; error?: string; sessionState: SessionState }> {
-  // Normalize notes
-  if (name === "add_notes_to_clip" && args.notes) args.notes = normalizeNotes(args.notes);
-  if (name === "add_notes_to_clip" && !args.notes && typeof args.midi_id === "string") {
-    const loaded = await callPythonApi("/api/load_midi_notes", { midi_id: args.midi_id });
-    if (loaded && typeof loaded === "object" && Array.isArray((loaded as { notes?: unknown[] }).notes)) {
-      args.notes = normalizeNotes((loaded as { notes: unknown[] }).notes);
-    }
-  }
+      setDrumPattern: tool({
+        description: "Fill the drum rack step sequencer with a rhythm. Each array is 16 booleans.",
+        inputSchema: zodSchema(z.object({
+          kick:    z.array(z.boolean()).length(16),
+          snare:   z.array(z.boolean()).length(16),
+          hihat:   z.array(z.boolean()).length(16),
+          openHat: z.array(z.boolean()).length(16).optional(),
+        })),
+      }),
 
-  console.log(`[Wonder] → ${name}`, JSON.stringify(args).slice(0, 200));
+      createTrack: tool({
+        description: "Create an empty audio track in the DAW.",
+        inputSchema: zodSchema(z.object({ name: z.string(), color: z.string().optional() })),
+      }),
 
-  const validation = validateBeforeExecution(name, args, sessionState);
-  if (!validation.valid) {
-    console.error(`[Wonder] ✗ Validation failed for ${name}:`, validation.errors);
-    return { error: `Validation failed: ${validation.errors.join(", ")}. ${getHint(name, "")}`, sessionState };
-  }
+      addBlock: tool({
+        description: "Add an audio block to an existing track.",
+        inputSchema: zodSchema(z.object({
+          trackId: z.string(), name: z.string(),
+          startMeasure: z.number(), durationMeasures: z.number(),
+        })),
+      }),
 
-  try {
-    let result: unknown;
-    const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
+      moveBlock: tool({
+        description: "Move a block to a new measure position.",
+        inputSchema: zodSchema(z.object({ blockId: z.string(), newStartMeasure: z.number() })),
+      }),
 
-    if (name === "load_midi_notes") {
-      result = await callPythonApi("/api/load_midi_notes", args);
-    } else if (name === "generate_sound_effect") {
-      if (!elevenLabsKey) throw new Error("ELEVENLABS_API_KEY not set");
-      result = await generateSoundEffect(args.description as string, (args.duration_seconds as number | undefined) ?? 2.0, elevenLabsKey);
-    } else if (name === "text_to_speech") {
-      if (!elevenLabsKey) throw new Error("ELEVENLABS_API_KEY not set");
-      result = await textToSpeech(args.text as string, elevenLabsKey, args.voice_id as string | undefined);
-    } else {
-      result = await sendAbletonCommand(name, args);
-    }
+      deleteBlock: tool({
+        description: "Delete a block from the timeline.",
+        inputSchema: zodSchema(z.object({ blockId: z.string() })),
+      }),
 
-    console.log(`[Wonder] ✓ ${name}:`, JSON.stringify(result).slice(0, 100));
-    const newState = updateStateAfterToolCall(sessionState, name, args, result);
-    return { result, sessionState: newState };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[Wonder] ✗ ${name}: ${msg}`);
-    return { error: msg, sessionState };
-  }
-}
+      deleteTrack: tool({
+        description: "Delete a track and all its blocks.",
+        inputSchema: zodSchema(z.object({ trackId: z.string() })),
+      }),
 
-// ── Claude agentic loop ────────────────────────────────────────────────────
+      setVolume: tool({
+        description: "Set track volume (0-100).",
+        inputSchema: zodSchema(z.object({ trackId: z.string(), volume: z.number().min(0).max(100) })),
+      }),
 
-function toClaudeTools(): Anthropic.Tool[] {
-  return WONDER_TOOL_DECLARATIONS.map((decl) => {
-    // Convert Gemini SchemaType enum values to plain JSON Schema strings
-    const convertSchema = (schema: Record<string, unknown>): Record<string, unknown> => {
-      const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(schema)) {
-        if (k === "type" && typeof v === "string") {
-          out[k] = v.toLowerCase();
-        } else if (k === "properties" && typeof v === "object" && v !== null) {
-          const props: Record<string, unknown> = {};
-          for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) {
-            props[pk] = convertSchema(pv as Record<string, unknown>);
-          }
-          out[k] = props;
-        } else {
-          out[k] = v;
-        }
-      }
-      return out;
-    };
+      setMute: tool({
+        description: "Mute or unmute a track.",
+        inputSchema: zodSchema(z.object({ trackId: z.string(), muted: z.boolean() })),
+      }),
 
-    const params = decl.parameters as Record<string, unknown> | undefined;
-    return {
-      name: decl.name,
-      description: decl.description ?? "",
-      input_schema: params ? convertSchema(params) as Anthropic.Tool["input_schema"] : { type: "object" as const, properties: {} },
-    };
-  });
-}
+      generateAndPlaceAudio: tool({
+        description: "Generate audio via ElevenLabs and place it on a new DAW track. Use for 808s, pads, melodies, FX. Use setDrumPattern for drums instead.",
+        inputSchema: zodSchema(z.object({
+          description:      z.string().describe("Detailed sound description"),
+          durationSeconds:  z.number().min(0.5).max(4).optional(),
+          trackName:        z.string(),
+          startMeasure:     z.number(),
+          durationMeasures: z.number().optional(),
+          color:            z.string().optional(),
+        })),
+      }),
 
-async function runClaudeLoop(
-  anthropic: Anthropic,
-  messages: Anthropic.MessageParam[],
-  systemPrompt: string
-): Promise<string> {
-  let sessionState: SessionState = createInitialState();
-  const claudeTools = toClaudeTools();
+      generateLoop: tool({
+        description:
+          "Generate a BPM-synced looping backing track (piano, chords, bass, pads, melody). " +
+          "The frontend calculates exact duration from bars + live BPM and injects BPM + key into the prompt. " +
+          "Use this for anything that repeats on the grid.",
+        inputSchema: zodSchema(z.object({
+          description:  z.string().describe("Instrument + feel + genre. Do NOT include BPM or key — the frontend injects those."),
+          bars:         z.number().int().min(1).max(8).default(4).describe("Number of bars (default 4, max 8 for 22s API cap)"),
+          trackName:    z.string().describe("Short display name for the DAW track"),
+          startMeasure: z.number().int().min(1).default(1).describe("Where to place the clip on the arrangement timeline"),
+          isLoop:       z.boolean().default(true).describe("Whether to loop the clip (default true)"),
+          color:        z.string().optional(),
+        })),
+      }),
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 4096,
-      system: systemPrompt,
-      tools: claudeTools,
-      messages,
-    });
+      setTrackFX: tool({
+        description: "Apply reverb, distortion (drive), and 3-band EQ to a specific track by ID. Call after generating a track to shape the sound.",
+        inputSchema: zodSchema(z.object({
+          trackId:    z.string().describe("The DAW track ID to apply FX to"),
+          reverb:     z.number().min(0).max(1).optional().describe("Reverb wet mix 0-1"),
+          drive:      z.number().min(0).max(1).optional().describe("Distortion drive amount 0-1"),
+          eqLow:      z.number().min(-12).max(12).optional().describe("Low shelf gain in dB"),
+          eqMid:      z.number().min(-12).max(12).optional().describe("Mid gain in dB"),
+          eqHigh:     z.number().min(-12).max(12).optional().describe("High shelf gain in dB"),
+          cabEnabled: z.boolean().optional().describe("Enable cabinet sim (speaker roll-off) — good for guitars/saturation"),
+        })),
+      }),
 
-    if (response.stop_reason === "end_turn") {
-      const textBlock = response.content.find((b) => b.type === "text");
-      return textBlock ? (textBlock as Anthropic.TextBlock).text : "";
-    }
+      applyVibeFX: tool({
+        description: "Auto-apply FX presets to ALL tracks based on a vibe/mood/genre. Use when user asks for a sonic feel like 'make it lo-fi', 'add reverb everywhere', 'bedroom pop vibes', etc.",
+        inputSchema: zodSchema(z.object({
+          vibe: z.enum(["lo-fi", "dreamy", "dark", "bright", "warm", "gritty", "808", "clean", "bedroom-pop", "drill", "jazz"]).describe("The vibe preset to apply"),
+          trackIds: z.array(z.string()).optional().describe("Specific track IDs to apply to. If omitted, applies to all tracks."),
+        })),
+      }),
 
-    if (response.stop_reason !== "tool_use") {
-      const textBlock = response.content.find((b) => b.type === "text");
-      return textBlock ? (textBlock as Anthropic.TextBlock).text : "";
-    }
-
-    // Process tool calls
-    const toolUseBlocks = response.content.filter((b) => b.type === "tool_use") as Anthropic.ToolUseBlock[];
-    const toolResults = await Promise.all(
-      toolUseBlocks.map(async (block) => {
-        const args = (block.input as Record<string, unknown>) ?? {};
-        const { result, error, sessionState: newState } = await executeTool(block.name, args, sessionState);
-        sessionState = newState;
-        return {
-          type: "tool_result" as const,
-          tool_use_id: block.id,
-          content: JSON.stringify(error ? { error, hint: getHint(block.name, error) } : { result }),
-        };
-      })
-    );
-
-    messages.push({ role: "assistant", content: response.content });
-    messages.push({ role: "user", content: toolResults });
-  }
-
-  return "Done.";
-}
-
-// ── Gemini agentic loop ────────────────────────────────────────────────────
-
-async function runGeminiLoop(
-  genAI: GoogleGenerativeAI,
-  history: Content[],
-  lastMessage: string,
-  systemPrompt: string,
-  audioData?: string,
-  mimeType?: string
-): Promise<string> {
-  let sessionState: SessionState = createInitialState();
-
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash-lite",
-    systemInstruction: systemPrompt,
-    tools: [{ functionDeclarations: WONDER_TOOL_DECLARATIONS }],
-    toolConfig: { functionCallingConfig: { mode: FunctionCallingMode.AUTO } },
-    generationConfig: {
-      // @ts-ignore
-      thinkingConfig: { thinkingBudget: 0 },
+      searchSamples: tool({
+        description: "Search the sample library for sounds matching a vibe, instrument, or BPM. Use when user asks for specific sounds like 'warm vinyl kick' or 'lo-fi snare'.",
+        inputSchema: zodSchema(z.object({
+          query: z.string().describe("Natural language search query"),
+          bpm:   z.number().optional().describe("Target BPM to filter by"),
+        })),
+      }),
     },
   });
 
-  const chat = model.startChat({ history });
-
-  let response;
-  if (audioData && mimeType) {
-    response = await chat.sendMessage([
-      { inlineData: { data: audioData, mimeType } },
-      { text: "Listen to this audio. If humming/melody, transcribe to MIDI. If speaking, follow instructions to create music in Ableton." },
-    ]);
-  } else {
-    response = await chat.sendMessage(lastMessage);
-  }
-
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const candidate = response.response.candidates?.[0];
-    if (!candidate?.content?.parts) break;
-
-    const functionCalls = candidate.content.parts.filter((p) => p.functionCall);
-    if (functionCalls.length === 0) break;
-
-    const toolResults = await Promise.all(
-      functionCalls.map(async (part) => {
-        const call = part.functionCall!;
-        const args = (call.args as Record<string, unknown>) ?? {};
-        const { result, error, sessionState: newState } = await executeTool(call.name, args, sessionState);
-        sessionState = newState;
-        return {
-          functionResponse: {
-            name: call.name,
-            response: error
-              ? { error, hint: getHint(call.name, error) }
-              : { result },
-          },
-        };
-      })
-    );
-
-    response = await chat.sendMessage(toolResults);
-  }
-
-  return response.response.text();
-}
-
-// ── Request handler ────────────────────────────────────────────────────────
-
-export async function POST(req: NextRequest) {
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  const geminiKey = process.env.GEMINI_API_KEY;
-
-  if (!anthropicKey && !geminiKey) {
-    return NextResponse.json(
-      { content: "No AI API key set — add ANTHROPIC_API_KEY or GEMINI_API_KEY to .env" },
-      { status: 500 }
-    );
-  }
-
-  try {
-    const { messages, audioData, mimeType, midiContext, rhythmContext } = await req.json() as {
-      messages: Array<{ role: "user" | "assistant"; content: string }>;
-      audioData?: string;
-      mimeType?: string;
-      midiContext?: MidiContext;
-      rhythmContext?: RhythmContext;
-    };
-
-    let systemPrompt = WONDER_SYSTEM_PROMPT;
-    if (midiContext && midiContext.note_count > 0) systemPrompt += buildMidiContext(midiContext);
-    if (rhythmContext?.note_starts_beats.length) systemPrompt += buildRhythmContext(rhythmContext);
-
-    const lastMessage = messages[messages.length - 1];
-    let finalText: string;
-
-    if (anthropicKey) {
-      // ── Claude path ──
-      const anthropic = new Anthropic({ apiKey: anthropicKey });
-      const claudeMessages: Anthropic.MessageParam[] = messages.slice(0, -1).map((m) => ({
-        role: m.role === "assistant" ? "assistant" : "user",
-        content: m.content,
-      }));
-      // Strip leading assistant messages (Claude requires user-first)
-      while (claudeMessages.length > 0 && claudeMessages[0].role === "assistant") {
-        claudeMessages.shift();
-      }
-      claudeMessages.push({ role: "user", content: lastMessage.content });
-      finalText = await runClaudeLoop(anthropic, claudeMessages, systemPrompt);
-    } else {
-      // ── Gemini fallback ──
-      const genAI = new GoogleGenerativeAI(geminiKey!);
-      const rawHistory: Content[] = messages.slice(0, -1).map((m) => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }],
-      }));
-      const firstUserIdx = rawHistory.findIndex((m) => m.role === "user");
-      const history = firstUserIdx >= 0 ? rawHistory.slice(firstUserIdx) : [];
-      finalText = await runGeminiLoop(genAI, history, lastMessage.content, systemPrompt, audioData, mimeType);
-    }
-
-    return NextResponse.json({ content: finalText });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("Wonder chat error:", message);
-    return NextResponse.json({ content: `Error: ${message}` }, { status: 500 });
-  }
-}
-
-function getHint(toolName: string, error: string): string {
-  if (toolName === "add_notes_to_clip") {
-    if (error.includes("No clip")) return "Call create_clip first, then add_notes_to_clip.";
-    if (error.includes("index") || error.includes("range")) return "Check track_index — call get_session_info to verify track count.";
-    return "notes must be array of {pitch,start_time,duration,velocity,mute}. Create clip first.";
-  }
-  if (toolName === "create_midi_track" || toolName === "create_audio_track") return "Call get_session_info first.";
-  if (toolName === "load_instrument_by_name") return "Use exact name: 'Wavetable', 'Operator', 'Analog', 'Drift', 'Simpler', 'Drum Rack'.";
-  return "Read the error and retry with corrected parameters.";
+  return result.toUIMessageStreamResponse();
 }

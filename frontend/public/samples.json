@@ -1,0 +1,100 @@
+{
+  "samples": [
+    {
+      "id": "kick_dusty_analog",
+      "name": "Dusty Analog Kick",
+      "url": "/samples/kick_dusty.wav",
+      "type": "one-shot",
+      "instrument": "kick",
+      "tags": ["warm", "analog", "dusty", "vinyl", "lo-fi", "round", "sub"],
+      "bpm": null,
+      "key": null,
+      "duration_seconds": 0.4,
+      "source": "SP-404 Library"
+    },
+    {
+      "id": "snare_vinyl_crack",
+      "name": "Vinyl Crackle Snare",
+      "url": "/samples/snare_vinyl.wav",
+      "type": "one-shot",
+      "instrument": "snare",
+      "tags": ["vinyl", "crackle", "dusty", "warm", "lo-fi", "rimshot", "organic"],
+      "bpm": null,
+      "key": null,
+      "duration_seconds": 0.35,
+      "source": "Crabtree Music Library"
+    },
+    {
+      "id": "hat_organic_open",
+      "name": "Organic Open Hat",
+      "url": "/samples/hat_organic.wav",
+      "type": "one-shot",
+      "instrument": "hihat",
+      "tags": ["organic", "open", "bright", "acoustic", "jazz", "swing"],
+      "bpm": null,
+      "key": null,
+      "duration_seconds": 0.6,
+      "source": "Splice Lo-Fi Collection"
+    },
+    {
+      "id": "piano_loop_aminor",
+      "name": "Late Night Rhodes Am",
+      "url": "/samples/rhodes_am_loop.wav",
+      "type": "loop",
+      "instrument": "keys",
+      "tags": ["warm", "rhodes", "neo-soul", "intimate", "spacious", "jazzy", "mellow"],
+      "bpm": 85,
+      "key": "Am",
+      "duration_seconds": 8.0,
+      "source": "Kingsway Music Library"
+    },
+    {
+      "id": "bass_sub_fminor",
+      "name": "Deep Sub Bass Fm",
+      "url": "/samples/sub_bass_fm.wav",
+      "type": "loop",
+      "instrument": "bass",
+      "tags": ["sub", "deep", "warm", "analog", "round", "heavy"],
+      "bpm": 85,
+      "key": "Fm",
+      "duration_seconds": 4.0,
+      "source": "Serum Preset Bounce"
+    },
+    {
+      "id": "texture_vinyl_crackle",
+      "name": "Vinyl Surface Noise",
+      "url": "/samples/vinyl_crackle.wav",
+      "type": "loop",
+      "instrument": "texture",
+      "tags": ["vinyl", "crackle", "warm", "ambient", "noise", "lo-fi", "analog", "dusty"],
+      "bpm": null,
+      "key": null,
+      "duration_seconds": 16.0,
+      "source": "RC-20 Bounce"
+    },
+    {
+      "id": "chord_stab_soul",
+      "name": "Neo-Soul Chord Stab",
+      "url": "/samples/chord_soul_stab.wav",
+      "type": "one-shot",
+      "instrument": "keys",
+      "tags": ["neo-soul", "warm", "chord", "stab", "organic", "jazzy"],
+      "bpm": null,
+      "key": "Dm9",
+      "duration_seconds": 1.2,
+      "source": "Arturia Analog Lab"
+    },
+    {
+      "id": "perc_shaker_organic",
+      "name": "Organic Shaker Loop",
+      "url": "/samples/shaker_organic.wav",
+      "type": "loop",
+      "instrument": "percussion",
+      "tags": ["organic", "shaker", "swing", "acoustic", "warm", "groove"],
+      "bpm": 85,
+      "key": null,
+      "duration_seconds": 4.0,
+      "source": "Splice Lo-Fi Collection"
+    }
+  ]
+}

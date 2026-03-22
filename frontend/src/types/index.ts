@@ -38,6 +38,13 @@ export interface ChatResponse {
   suggestions?: string[];
 }
 
+export interface AudioAttachment {
+  filename: string;
+  base64: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -46,6 +53,7 @@ export interface ChatMessage {
   isGreeting?: boolean; // If true, don't send to Gemini (just display)
   toolLog?: ToolLogEntry[];
   suggestions?: string[];
+  audioAttachment?: AudioAttachment;
 }
 
 export interface TranscribedNote {
@@ -80,4 +88,87 @@ export interface WonderProfile {
   artists: string[];
   bpmRange: [number, number];
   defaultKey: string;
+}
+
+// ─── Browser DAW Types ────────────────────────────────────────────────────────
+
+export interface DAWTrack {
+  id: string;
+  name: string;
+  color: string; // hex e.g. "#C1E1C1"
+  muted: boolean;
+  volume: number; // 0–100
+  volumeDb?: number;
+  pan?: number;
+  solo?: boolean;
+  mixAnimating?: boolean;
+  audioBlob?: Blob;
+  audioDurationSec?: number;
+  audioStorageId?: string; // IndexedDB key
+  waveformCache?: number[];
+  // Loop stem config — set when track was generated as a looping backing track
+  loop?: boolean;
+  loopBars?: number;        // How many bars before the loop point
+  loopDurationSec?: number; // Exact audio duration in seconds (for loopEnd)
+}
+
+export interface DAWBlock {
+  id: string;
+  trackId: string;
+  name: string;
+  startMeasure: number; // 1-based, 0.25 snap granularity
+  durationMeasures: number;
+  color?: string;
+  bufferOffsetSec?: number; // NDE: seconds into audio buffer where this clip starts (set by razor splits)
+  pinned?: boolean;          // true after manual resize or razor split — prevents auto-duration sync
+}
+
+export interface DAWTransport {
+  isPlaying: boolean;
+  currentMeasure: number;
+  bpm: number;
+  totalMeasures: number;
+}
+
+export interface DAWRecordingState {
+  isRecording: boolean;
+  armedTrackId: string | null;
+  recordStartTime: number | null;
+  monitorEnabled: boolean;
+}
+
+export interface DAWLoopState {
+  loopEnabled: boolean;
+  loopStart: number;
+  loopEnd: number;
+}
+
+export type DAWGridSize = 8 | 16 | 32 | 64;
+
+export interface DrumPattern {
+  kick:    boolean[];  // 16 steps
+  snare:   boolean[];
+  hihat:   boolean[];
+  openHat: boolean[];
+}
+
+export interface SampleLibraryEntry {
+  id: string;
+  name: string;
+  audioUrl: string; // data URI or blob URL
+  tags: string[];
+  createdAt: number; // Date.now()
+}
+
+export interface DAWState {
+  transport: DAWTransport;
+  tracks: DAWTrack[];
+  blocks: DAWBlock[];
+  selectedBlockId: string | null;
+  drumPattern?: DrumPattern;
+  sampleLibrary: SampleLibraryEntry[];
+  recording: DAWRecordingState;
+  loop: DAWLoopState;
+  gridSize: DAWGridSize;
+  kidsMode: boolean;
 }

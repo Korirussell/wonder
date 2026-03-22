@@ -1,14 +1,18 @@
 @import "tailwindcss";
 
-/* Graph-paper dot grid background */
 body {
-  background-color: #fdfdfb;
-  background-image: radial-gradient(#2d2d2d 0.5px, transparent 0.5px);
-  background-size: 24px 24px;
+  background-color: #F8F8F4;
   font-family: "Be Vietnam Pro", sans-serif;
   color: #2d2d2d;
   overflow: hidden;
   height: 100vh;
+}
+
+/* DAW timeline grid background */
+.daw-grid-bg {
+  background-color: #F8F8F4;
+  background-image: radial-gradient(rgba(45, 45, 45, 0.1) 0.75px, transparent 0.75px);
+  background-size: 16px 16px;
 }
 
 /* Hard shadows */
@@ -34,16 +38,23 @@ body {
 
 /* Custom scrollbar */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
 .custom-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #2d2d2d;
+  background: rgba(45, 45, 45, 0.15);
   border-radius: 10px;
 }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(45, 45, 45, 0.3);
+}
+
+/* Hidden scrollbar — scroll still works, bar is invisible */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 
 /* Fader thumb gradient */
 .fader-thumb {
@@ -57,9 +68,213 @@ body {
 
 /* Recording pulse ring */
 @keyframes record-pulse {
-  0%, 100% { box-shadow: 4px 4px 0px 0px rgba(45,45,45,1), 0 0 0 0 rgba(250,113,80,0.6); }
-  50%       { box-shadow: 4px 4px 0px 0px rgba(45,45,45,1), 0 0 0 8px rgba(250,113,80,0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(224,90,58,0.5); }
+  50%       { box-shadow: 0 0 0 6px rgba(224,90,58,0); }
 }
 .recording-pulse {
   animation: record-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ghost-pulse {
+  0%, 100% { opacity: 0.95; }
+  50% { opacity: 0.7; }
+}
+
+.recording-ghost-clip {
+  animation: ghost-pulse 1s ease-in-out infinite;
+  background-image:
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255,255,255,0.08) 0px,
+      rgba(255,255,255,0.08) 8px,
+      rgba(26,26,26,0.08) 8px,
+      rgba(26,26,26,0.08) 16px
+    );
+}
+
+@keyframes wonder-ai-aura-breathe {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.008);
+  }
+}
+
+.wonder-ai-aura {
+  animation: wonder-ai-aura-breathe 2.8s ease-in-out infinite;
+  transition: opacity 220ms ease;
+}
+
+/* Transient-triggered header bounce (single-shot, fires on loud hits only) */
+@keyframes wonder-transient-bounce {
+  0%   { transform: scaleY(1); }
+  25%  { transform: scaleY(1.022); }
+  55%  { transform: scaleY(0.993); }
+  80%  { transform: scaleY(1.006); }
+  100% { transform: scaleY(1); }
+}
+
+.wonder-transient-bounce {
+  animation: wonder-transient-bounce 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) forwards;
+}
+
+/* Full-screen rumble (single-shot, fires on loud transients only) */
+@keyframes wonder-screen-rumble {
+  0%   { transform: translate(0, 0) rotate(0deg); }
+  15%  { transform: translate(-4px, 2px) rotate(-0.2deg); }
+  30%  { transform: translate(4px, -2px) rotate(0.2deg); }
+  45%  { transform: translate(-3px, 1px) rotate(-0.15deg); }
+  60%  { transform: translate(3px, -1px) rotate(0.15deg); }
+  75%  { transform: translate(-1px, 1px) rotate(-0.05deg); }
+  90%  { transform: translate(1px, -0.5px) rotate(0.05deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+.wonder-screen-rumble {
+  animation: wonder-screen-rumble 0.42s cubic-bezier(0.36, 0.07, 0.19, 0.97) forwards;
+}
+
+.wonder-shell :where(button, input:not([type="range"]), textarea, select):focus-visible {
+  outline: 2px solid #1A1A1A;
+  outline-offset: 2px;
+}
+
+.wonder-shell button:not([disabled]) {
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+
+@media (hover: hover) {
+  .wonder-shell button:not([disabled]):hover {
+    transform: translateY(-2px);
+    box-shadow: 6px 6px 0px 0px rgba(26,26,26,1);
+  }
+}
+
+.wonder-shell button:not([disabled]):active {
+  transform: translateY(1px);
+  box-shadow: 3px 3px 0px 0px rgba(26,26,26,1);
+}
+
+.wonder-shell :where(.rounded, .rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl) {
+  border-radius: 2px !important;
+}
+
+html[data-theme="kids"] body {
+  background:
+    radial-gradient(circle at top left, rgba(96, 165, 250, 0.24), transparent 34%),
+    radial-gradient(circle at top right, rgba(250, 204, 21, 0.2), transparent 28%),
+    radial-gradient(circle at bottom center, rgba(244, 63, 94, 0.14), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(251, 146, 60, 0.18), transparent 30%),
+    #FFFBEB;
+  color: #1A1A1A;
+}
+
+html[data-theme="kids"] .wonder-shell {
+  background: transparent !important;
+}
+
+html[data-theme="kids"] .font-mono,
+html[data-theme="kids"] .wonder-shell {
+  font-family: "Hiragino Maru Gothic ProN", "Arial Rounded MT Bold", ui-rounded, system-ui, sans-serif;
+}
+
+html[data-theme="kids"] .wonder-shell :where(button, select, input:not([type="range"]), textarea) {
+  border-radius: 1.25rem !important;
+}
+
+html[data-theme="kids"] .wonder-shell :where(.rounded, .rounded-sm, .rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl, .rounded-full) {
+  border-radius: 1.5rem !important;
+}
+
+html[data-theme="kids"] .wonder-shell button:not([disabled]) {
+  box-shadow: 5px 5px 0px 0px rgba(26,26,26,0.15);
+}
+
+html[data-theme="kids"] .wonder-shell button:not([disabled]):active {
+  box-shadow: 2px 2px 0px 0px rgba(26,26,26,0.12);
+}
+
+html[data-theme="kids"] .daw-grid-bg {
+  background-color: #FFF9E5;
+  background-image:
+    radial-gradient(rgba(96, 165, 250, 0.14) 1px, transparent 1px),
+    linear-gradient(to right, rgba(250, 204, 21, 0.14) 1px, transparent 1px);
+  background-size: 20px 20px, 80px 100%;
+}
+
+@keyframes wonder-kids-quake {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  12% { transform: translate3d(-10px, 6px, 0) rotate(-0.8deg) scale(1.02); }
+  24% { transform: translate3d(10px, -7px, 0) rotate(0.8deg) scale(1.03); }
+  38% { transform: translate3d(-8px, -2px, 0) rotate(-0.5deg) scale(1.015); }
+  52% { transform: translate3d(7px, 6px, 0) rotate(0.35deg) scale(1.01); }
+  68% { transform: translate3d(-4px, -5px, 0) rotate(-0.2deg) scale(1.005); }
+  84% { transform: translate3d(3px, 2px, 0) rotate(0.12deg) scale(1.002); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+
+.wonder-kids-quake {
+  animation: wonder-kids-quake 720ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes wonder-kids-light {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+.wonder-kids-light {
+  animation: wonder-kids-light 1.25s ease-in-out infinite;
+}
+
+.wonder-kids-clip {
+  position: relative;
+}
+
+.wonder-kids-clip::after {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border-radius: 999px;
+  border: 2px dashed rgba(255, 255, 255, 0.45);
+  pointer-events: none;
+}
+
+html[data-theme="kids"] .clip-block:hover {
+  transform: translateY(-3px) scale(1.01);
+  box-shadow: 8px 8px 0px 0px rgba(26,26,26,0.14) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wonder-ai-aura,
+  .wonder-transient-bounce,
+  .wonder-screen-rumble,
+  .recording-pulse,
+  .recording-ghost-clip,
+  .wonder-kids-quake,
+  .wonder-kids-light {
+    animation: none !important;
+  }
+}
+
+/* Clip block hover lift */
+.clip-block {
+  transition: box-shadow 120ms ease, transform 120ms ease;
+}
+.clip-block:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12) !important;
+  transform: translateY(-0.5px);
 }

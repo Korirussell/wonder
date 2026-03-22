@@ -82,6 +82,55 @@ export async function generateSoundEffect(
   };
 }
 
+// ── Sound Effect Buffer (returns base64, no disk write — for browser DAW) ────
+
+export interface SoundEffectBufferResult {
+  audioBase64: string;
+  mimeType: string;
+  filename: string;
+  duration_seconds: number;
+}
+
+/**
+ * Generate a sound effect and return it as base64 — does NOT write to disk.
+ * Use this when the audio needs to land in the browser DAW rather than Ableton.
+ */
+export async function generateSoundEffectBuffer(
+  description: string,
+  durationSeconds: number = 2.0,
+  apiKey: string
+): Promise<SoundEffectBufferResult> {
+  const clampedDuration = Math.min(5, Math.max(0.5, durationSeconds));
+
+  const response = await fetch(`${ELEVENLABS_API_BASE}/sound-generation`, {
+    method: "POST",
+    headers: {
+      "xi-api-key": apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      text: description,
+      duration_seconds: clampedDuration,
+      output_format: "mp3_44100_128",
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`ElevenLabs sound-generation failed (${response.status}): ${err}`);
+  }
+
+  const audioBytes = Buffer.from(await response.arrayBuffer());
+  const filename = `sfx_${slug(description)}_${Date.now()}.mp3`;
+
+  return {
+    audioBase64: audioBytes.toString("base64"),
+    mimeType: "audio/mpeg",
+    filename,
+    duration_seconds: clampedDuration,
+  };
+}
+
 // ── Text to Speech ────────────────────────────────────────────────────────────
 
 const DEFAULT_VOICE_ID = "dPEieVXDPKaDPRG5YA6R"; // same default as the MCP server

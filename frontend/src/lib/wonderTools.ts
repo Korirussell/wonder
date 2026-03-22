@@ -265,4 +265,185 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ["query"],
     },
   },
+
+  // ─── Audio Processing ───────────────────────────────────────────────────────
+  {
+    name: "extract_harmonics",
+    description: "Extract harmonic components from an audio file using HPSS (Harmonic-Percussive Source Separation). Isolates melodic/harmonic content from percussion. Use this when the user wants to separate harmony from drums, or wants the melodic part of a sample.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64 encoded audio data" },
+        filename: { type: SchemaType.STRING, description: "Original filename for reference" },
+      },
+      required: ["audio_data"],
+    },
+  },
+  {
+    name: "process_reverb",
+    description: "Apply reverb effect to audio. Adds spatial depth and ambience. Use this when the user wants to add space, room, or ambience to a sound.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64 encoded audio data" },
+        filename: { type: SchemaType.STRING, description: "Original filename" },
+        room_size: { type: SchemaType.NUMBER, description: "Room size 0.0-1.0, default 0.5" },
+        damping: { type: SchemaType.NUMBER, description: "High-freq damping 0.0-1.0, default 0.5" },
+        wet_level: { type: SchemaType.NUMBER, description: "Reverb level 0.0-1.0, default 0.3" },
+        dry_level: { type: SchemaType.NUMBER, description: "Dry signal level 0.0-1.0, default 0.7" },
+      },
+      required: ["audio_data"],
+    },
+  },
+  {
+    name: "chop_audio",
+    description: "Intelligently chop audio into segments using onset detection and k-means clustering. Creates multiple audio segments based on musical onsets. Use this to create sample chops from a longer audio file.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64 encoded audio data" },
+        filename: { type: SchemaType.STRING, description: "Original filename" },
+        default_length: { type: SchemaType.NUMBER, description: "Default chop length in seconds, default 1.8" },
+        min_duration: { type: SchemaType.NUMBER, description: "Minimum chop duration in seconds, default 0.2" },
+        n_clusters: { type: SchemaType.NUMBER, description: "Number of k-means clusters for grouping similar chops, default 6" },
+      },
+      required: ["audio_data"],
+    },
+  },
+  {
+    name: "adjust_pitch",
+    description: "Shift the pitch of audio by a number of semitones. Positive = higher pitch, negative = lower pitch.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64 encoded audio data" },
+        filename: { type: SchemaType.STRING, description: "Original filename" },
+        semitones: { type: SchemaType.NUMBER, description: "Semitones to shift. Positive = up, negative = down" },
+      },
+      required: ["audio_data", "semitones"],
+    },
+  },
+  {
+    name: "adjust_speed",
+    description: "Change the playback speed of audio without changing pitch. 1.0 = normal, 2.0 = double speed, 0.5 = half speed.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        audio_data: { type: SchemaType.STRING, description: "Base64 encoded audio data" },
+        filename: { type: SchemaType.STRING, description: "Original filename" },
+        speed_factor: { type: SchemaType.NUMBER, description: "Speed multiplier. 1.0 = normal, 2.0 = 2x faster, 0.5 = 2x slower" },
+      },
+      required: ["audio_data", "speed_factor"],
+    },
+  },
+
+  // ─── Browser DAW ─────────────────────────────────────────────────────────────
+  {
+    name: "createTrack",
+    description: "Create a new audio track in the browser DAW (no Ableton required). Use this when the user wants to add a track to the browser DAW.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        name: { type: SchemaType.STRING, description: "Track name" },
+        color: { type: SchemaType.STRING, description: "Hex color string e.g. '#C1E1C1'" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "addBlock",
+    description: "Add an audio block to a browser DAW track at a specific measure position.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        trackId: { type: SchemaType.STRING, description: "Track ID" },
+        name: { type: SchemaType.STRING, description: "Block name" },
+        startMeasure: { type: SchemaType.NUMBER, description: "Starting measure (1-based)" },
+        durationMeasures: { type: SchemaType.NUMBER, description: "Duration in measures" },
+      },
+      required: ["trackId", "startMeasure", "durationMeasures"],
+    },
+  },
+  {
+    name: "moveBlock",
+    description: "Move a block in the browser DAW to a new starting measure.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        blockId: { type: SchemaType.STRING, description: "Block ID" },
+        newStartMeasure: { type: SchemaType.NUMBER, description: "New starting measure" },
+      },
+      required: ["blockId", "newStartMeasure"],
+    },
+  },
+  {
+    name: "deleteBlock",
+    description: "Delete a block from the browser DAW timeline.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: { blockId: { type: SchemaType.STRING } },
+      required: ["blockId"],
+    },
+  },
+  {
+    name: "setBPM",
+    description: "Set the browser DAW BPM/tempo.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: { bpm: { type: SchemaType.NUMBER, description: "BPM 40-300" } },
+      required: ["bpm"],
+    },
+  },
+  {
+    name: "generateAndPlaceAudio",
+    description: "Generate a sound using ElevenLabs AI and place it on a new browser DAW track at a specific measure. Use this to create beats, bass lines, pads, sound effects, or any audio layer directly in the DAW. The audio will appear as a waveform on the timeline and play back immediately.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        description: { type: SchemaType.STRING, description: "Sound to generate, be specific and descriptive. E.g. 'deep punchy 808 bass hit with long sub tail', 'crisp trap snare with crack', 'dark atmospheric trap pad in C minor'" },
+        durationSeconds: { type: SchemaType.NUMBER, description: "Duration in seconds, 0.5–4.0. Short for drums (0.5-1.5s), longer for pads/melodies (2-4s)" },
+        trackName: { type: SchemaType.STRING, description: "Name for the track, e.g. '808 Bass', 'Trap Pad', 'Snare'" },
+        startMeasure: { type: SchemaType.NUMBER, description: "Where to place the block on the timeline (1-based measure number)" },
+        durationMeasures: { type: SchemaType.NUMBER, description: "How many measures the block occupies on the timeline" },
+        color: { type: SchemaType.STRING, description: "Hex color for the track, e.g. '#FCA5A5' for drums, '#BAE6FD' for pads" },
+      },
+      required: ["description", "trackName", "startMeasure"],
+    },
+  },
+  {
+    name: "loadSampleIntoPad",
+    description: "Generate a one-shot drum sound with ElevenLabs and load it directly into a drum rack pad slot (kick, snare, hihat, or openHat). The pad will play the sound immediately when triggered and also use it in the step sequencer. Always call this before setDrumPattern so the slots have real sounds.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        slot: {
+          type: SchemaType.STRING,
+          description: "Which drum pad to load into: 'kick' | 'snare' | 'hihat' | 'openHat'",
+        },
+        description: {
+          type: SchemaType.STRING,
+          description: "Sound to generate. Be specific: 'deep punchy 808 kick with sub tail', 'crisp snappy snare with crack', 'tight closed hi-hat', 'bright open hi-hat wash'",
+        },
+        durationSeconds: {
+          type: SchemaType.NUMBER,
+          description: "Sample length in seconds. Kick: 1.0–1.5. Snare: 0.5–1.0. Hi-hats: 0.3–0.8.",
+        },
+      },
+      required: ["slot", "description"],
+    },
+  },
+  {
+    name: "setDrumPattern",
+    description: "Fill the drum rack step sequencer with a rhythmic pattern. Each array contains 16 booleans representing 16 steps in one bar. true = hit on that step, false = silent. Call setBPM first, then this tool. The drum rack starts playing immediately.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        kick:    { type: SchemaType.ARRAY, items: { type: SchemaType.BOOLEAN }, description: "16-step kick drum pattern. Trap: [T,F,F,F,T,F,F,F,...]. House: [T,F,F,F,T,F,F,F,T,F,F,F,T,F,F,F]" },
+        snare:   { type: SchemaType.ARRAY, items: { type: SchemaType.BOOLEAN }, description: "16-step snare pattern. Standard: [F,F,F,F,T,F,F,F,F,F,F,F,T,F,F,F]" },
+        hihat:   { type: SchemaType.ARRAY, items: { type: SchemaType.BOOLEAN }, description: "16-step closed hi-hat pattern. Dense: all true. Trap rolls: [T,T,T,T,T,T,T,T,T,T,T,T,T,T,T,T]" },
+        openHat: { type: SchemaType.ARRAY, items: { type: SchemaType.BOOLEAN }, description: "16-step open hi-hat pattern. Usually sparse, e.g. [F,F,F,F,F,F,F,T,F,F,F,F,F,F,F,T]" },
+      },
+      required: ["kick", "snare", "hihat"],
+    },
+  },
 ];
