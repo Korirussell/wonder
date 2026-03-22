@@ -200,6 +200,17 @@ export const WONDER_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ["track_index", "rack_uri", "kit_path"],
     },
   },
+  {
+    name: "load_midi_notes",
+    description: "Load a previously transcribed MIDI note set by midi_id. Use this after audio transcription when you need the full notes array for add_notes_to_clip.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        midi_id: { type: SchemaType.STRING, description: "Identifier returned by transcription tools" },
+      },
+      required: ["midi_id"],
+    },
+  },
 
   // ─── Track / Clip Deletion ─────────────────────────────────────────────────
   {

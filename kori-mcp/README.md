@@ -99,22 +99,14 @@ pip install -e .
 3. Set **Control Surface** to "AbletonMCP"
 4. Set Input/Output to "None"
 
-### 4. **Connect AI Assistant**
+### 4. **Connect Wonder**
 
-**For Claude Desktop:**
-```json
-{
-  "mcpServers": {
-    "AbletonMCP": {
-      "command": "python",
-      "args": ["C:/path/to/ableton-mcp-extended/MCP_Server/server.py"]
-    }
-  }
-}
-```
+Wonder now talks directly to the Ableton Remote Script over TCP on `localhost:9877`, so you do not need to run the legacy `MCP_Server/server.py` wrapper anymore.
 
-**For Cursor:**
-Add MCP server in Settings → MCP with the same path.
+**For Wonder / frontend:**
+- Start the frontend app
+- Keep Ableton open with the `AbletonMCP` control surface enabled
+- The app sends commands directly to the Ableton socket bridge
 
 ### 5. **Start Creating!** 
 Open your AI assistant and try:
@@ -129,7 +121,7 @@ Open your AI assistant and try:
 ```mermaid
 graph TB
     A[You: Natural Language] --> B[AI Assistant]
-    B --> C[MCP Server]
+    B --> C[Wonder Frontend]
     C --> D[Ableton Remote Script]
     D --> E[Ableton Live API]
     E --> F[🎵 Your Music]
@@ -139,8 +131,8 @@ graph TB
 ```
 
 1. You issue a command in plain English to your AI assistant (e.g., "Create a new MIDI track and name it 'Bass'").
-2. The AI Assistant understands the intent and calls the appropriate tool from the MCP server.
-3. The MCP Server (server.py) receives the tool call and constructs a specific JSON command.
+2. The AI Assistant understands the intent and calls the appropriate frontend tool.
+3. Wonder sends a JSON command directly to Ableton over the socket bridge.
 4. The Ableton Remote Script (__init__.py), running inside Live, receives the JSON command via a socket connection.
 5. The Remote Script executes the command using the official Ableton Live API, making the change in your session instantly.
 
@@ -173,21 +165,17 @@ This demonstrates how to build:
 <summary><strong>🎤 ElevenLabs Voice Integration</strong></summary>
 
 
-This repository can be integrated with other MCP servers, such as one for ElevenLabs, to generate and import audio directly into your project.
+This repository can still be integrated with other MCP servers, such as one for ElevenLabs, to generate and import audio directly into your project.
 
 Set up the ElevenLabs MCP server according to its instructions.
 
-Update your AI assistant's config to include both servers.
+Update your AI assistant's config to include ElevenLabs.
 
 Example mcp-config.json:
 
 ```json
 {
   "mcpServers": {
-    "AbletonMCP": {
-      "command": "python",
-      "args": ["/path/to/ableton-mcp-extended/server.py"]
-    },
     "ElevenLabs": {
       "command": "python",
       "args": ["/path/to/elevenlabs_mcp/server.py"],

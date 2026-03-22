@@ -1,12 +1,12 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import type { SessionState } from "@/types";
 
 interface AbletonContextValue {
   connected: boolean;
   session: SessionState;
-  refresh: () => void;
+  refresh: () => Promise<void>;
 }
 
 const DEFAULT_SESSION: SessionState = {
@@ -19,16 +19,20 @@ const DEFAULT_SESSION: SessionState = {
 const AbletonContext = createContext<AbletonContextValue>({
   connected: false,
   session: DEFAULT_SESSION,
-  refresh: () => {},
+  refresh: async () => {},
 });
 
 export function AbletonProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [session, setSession] = useState<SessionState>(DEFAULT_SESSION);
+  const refreshInFlight = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
+
     try {
-      const res = await fetch("/api/ableton-state");
+      const res = await fetch("/api/ableton-state", { cache: "no-store" });
       const data = await res.json();
       setConnected(data.connected ?? false);
       if (data.connected) {
@@ -42,13 +46,22 @@ export function AbletonProvider({ children }: { children: ReactNode }) {
       }
     } catch {
       setConnected(false);
+    } finally {
+      refreshInFlight.current = false;
     }
   }, []);
 
   useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 5000);
-    return () => clearInterval(id);
+    const timeoutId = window.setTimeout(() => {
+      void refresh();
+    }, 0);
+    const id = window.setInterval(() => {
+      void refresh();
+    }, 5000);
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.clearInterval(id);
+    };
   }, [refresh]);
 
   return (
