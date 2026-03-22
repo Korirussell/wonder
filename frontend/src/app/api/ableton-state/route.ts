@@ -34,15 +34,30 @@ export async function GET() {
     for (let i = 0; i < Math.min(trackCount, 16); i++) {
       try {
         const info = await sendAbletonCommand("get_track_info", { track_index: i }) as Record<string, unknown>;
+
+        // Extract clip data from clip_slots (first 8 slots)
+        type RawSlot = { has_clip: boolean; clip?: { name?: string; length?: number; is_playing?: boolean } };
+        const rawSlots = (info.clip_slots as RawSlot[] | undefined) ?? [];
+        const clips = rawSlots.slice(0, 8).flatMap((slot, slotIdx) => {
+          if (!slot.has_clip) return [];
+          return [{
+            index: slotIdx,
+            name: slot.clip?.name || `Clip ${slotIdx + 1}`,
+            length: slot.clip?.length ?? 4,
+            isPlaying: slot.clip?.is_playing ?? false,
+          }];
+        });
+
         tracks.push({
           id: i,
           name: (info.name as string) || `Track ${i + 1}`,
-          volume: 0.85,
-          pan: 0,
-          mute: false,
-          solo: false,
-          armed: false,
-          devices: [],
+          volume: typeof info.volume === "number" ? info.volume : 0.85,
+          pan: typeof info.panning === "number" ? info.panning : 0,
+          mute: (info.mute as boolean) ?? false,
+          solo: (info.solo as boolean) ?? false,
+          armed: (info.arm as boolean) ?? false,
+          devices: ((info.devices as Array<{ name: string }>) ?? []).map((d) => d.name),
+          clips,
         });
       } catch {
         tracks.push({
@@ -54,6 +69,7 @@ export async function GET() {
           solo: false,
           armed: false,
           devices: [],
+          clips: [],
         });
       }
     }

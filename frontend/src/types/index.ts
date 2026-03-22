@@ -1,3 +1,10 @@
+export interface Clip {
+  index: number;     // Scene slot (0, 1, 2, …)
+  name: string;
+  length: number;    // In beats (4.0 = 1 bar at 4/4)
+  isPlaying: boolean;
+}
+
 export interface Track {
   id: number;
   name: string;
@@ -8,6 +15,7 @@ export interface Track {
   armed: boolean;
   devices: string[];
   color?: string; // optional accent color class
+  clips: Clip[];
 }
 
 export interface SessionState {

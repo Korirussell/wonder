@@ -37,8 +37,6 @@ export function buildSystemPromptWithKnowledge(basePrompt: string): string {
     return basePrompt;
   }
 
-  console.log("[Wonder] Successfully loaded wonder.md knowledge base");
-
   return `${basePrompt}
 
 ---
