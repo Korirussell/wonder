@@ -8,6 +8,7 @@ Run:
 """
 from __future__ import annotations
 
+import asyncio
 import shutil
 import tempfile
 from pathlib import Path
@@ -20,6 +21,22 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ._handlers import OUTPUT_ROOT, handle_generate, handle_split, handle_split_and_generate
+from .mongo.models import (
+    ChatLogRequest,
+    FeedbackRequest,
+    SessionAppendTurn,
+    SessionCreate,
+    SessionTurn,
+    UserReport,
+)
+from .mongo.repository import get_repository
+from .mongo.snowflake_client import emit_events
+from .mongo.snowflake_events import (
+    message_feedback_to_event,
+    session_document_to_analytics_events,
+    sound_saved_to_event,
+    user_report_to_event,
+)
 from .utils.audio_to_midi import get_midi_file_path, transcribe_audio_base64
 
 app = FastAPI(
@@ -329,6 +346,146 @@ def download_file(path: str) -> FileResponse:
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
     return FileResponse(str(p), filename=p.name)
+
+
+# ---------------------------------------------------------------------------
+# /session/new, /session/{id}, /chat  — MongoDB session persistence
+# ---------------------------------------------------------------------------
+
+
+@app.post("/session/new", status_code=201)
+async def create_session(body: SessionCreate) -> dict[str, Any]:
+    """Create or retrieve a chat session in MongoDB (idempotent via session_id)."""
+    repo = get_repository()
+    if repo is None:
+        return {"ok": False, "detail": "MongoDB not configured"}
+    doc = repo.create_session(body)
+    return {"ok": True, "session_id": doc["session_id"]}
+
+
+@app.get("/session/{session_id}")
+async def get_session(session_id: str) -> dict[str, Any]:
+    """Fetch a session document by its ID."""
+    repo = get_repository()
+    if repo is None:
+        raise HTTPException(status_code=503, detail="MongoDB not configured")
+    doc = repo.get_session(session_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    doc.pop("_id", None)
+    return doc
+
+
+@app.post("/chat")
+async def log_chat_turn(body: ChatLogRequest) -> dict[str, Any]:
+    """
+    Fire-and-forget endpoint called by the Next.js chat route after each AI response.
+    Appends the assistant turn to MongoDB and emits Snowflake analytics events.
+    """
+    repo = get_repository()
+    if repo is None:
+        return {"ok": False}
+
+    turn = SessionAppendTurn(
+        turn=SessionTurn(
+            role="assistant",
+            content=body.response,
+        )
+    )
+    doc = repo.append_session_turn(body.session_id, turn)
+
+    snowflake_rows: list[dict[str, Any]] = []
+    if doc:
+        snowflake_rows.extend(session_document_to_analytics_events(doc))
+
+    # Emit sound_saved events for any sounds generated during this turn
+    for se in body.sound_events:
+        turn_index = len(doc.get("turns", [])) - 1 if doc else 0
+        snowflake_rows.append(
+            sound_saved_to_event(
+                user_id=body.user_id,
+                session_id=body.session_id,
+                turn_index=max(turn_index, 0),
+                description=se.get("description", ""),
+                ableton_uri=se.get("ableton_uri"),
+                success=se.get("success", True),
+            )
+        )
+
+    if snowflake_rows:
+        asyncio.create_task(asyncio.to_thread(emit_events, snowflake_rows))
+
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# /events/feedback  — per-message thumbs up/down
+# ---------------------------------------------------------------------------
+
+
+@app.post("/events/feedback")
+async def record_feedback(body: FeedbackRequest) -> dict[str, Any]:
+    """Save message feedback to MongoDB and emit a Snowflake event."""
+    repo = get_repository()
+    if repo is None:
+        return {"ok": False, "detail": "MongoDB not configured"}
+
+    updated = repo.update_turn_feedback(
+        body.session_id,
+        body.turn_index,
+        body.feedback,
+        body.message_id,
+    )
+
+    event = message_feedback_to_event(
+        user_id=body.user_id,
+        session_id=body.session_id,
+        message_id=body.message_id,
+        turn_index=body.turn_index,
+        feedback=body.feedback,
+    )
+    asyncio.create_task(asyncio.to_thread(emit_events, [event]))
+
+    return {"ok": True, "updated": updated}
+
+
+# ---------------------------------------------------------------------------
+# /analytics/user/{user_id}  — per-user stats
+# ---------------------------------------------------------------------------
+
+
+@app.get("/analytics/user/{user_id}")
+async def get_user_analytics(user_id: str) -> dict[str, Any]:
+    """Return aggregated usage stats for a user from MongoDB."""
+    repo = get_repository()
+    if repo is None:
+        return {"session_count": 0, "messages_sent": 0, "liked": 0, "disliked": 0, "sounds_saved": 0}
+    return repo.get_user_analytics(user_id)
+
+
+# ---------------------------------------------------------------------------
+# /reports  — bug / feature / feedback reports
+# ---------------------------------------------------------------------------
+
+
+@app.post("/reports", status_code=201)
+async def create_report(body: UserReport) -> dict[str, Any]:
+    """Save a user-submitted bug report or feedback to MongoDB and Snowflake."""
+    repo = get_repository()
+    if repo is None:
+        return {"ok": False, "detail": "MongoDB not configured"}
+
+    doc = repo.create_report(body)
+
+    event = user_report_to_event(
+        user_id=body.user_id,
+        report_id=doc["report_id"],
+        report_type=body.type,
+        subject=body.subject,
+    )
+    asyncio.create_task(asyncio.to_thread(emit_events, [event]))
+
+    return {"ok": True, "report_id": doc["report_id"]}
 
 
 # ---------------------------------------------------------------------------
