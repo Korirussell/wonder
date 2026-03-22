@@ -22,7 +22,29 @@
       "Bash(.venv/bin/python -c \"import demucs; print\\(demucs.__version__\\)\")",
       "Bash(xargs ls:*)",
       "Bash(.venv/bin/python -c \"\nfrom soundsplit import split\n\nresult = split\\(\n    '/tmp/test_song.wav',\n    output_dir='/tmp/test_out',\n    stems=False,        # skip demucs for now \\(slow + model download\\)\n    midi=False,         # skip basic-pitch for now\n    per_stem_midi=False,\n    beat_grid=True,\n    key=True,\n\\)\n\nprint\\(\\)\nprint\\(f'BPM:          {result.bpm}'\\)\nprint\\(f'Time sig:     {result.time_signature}'\\)\nprint\\(f'Key:          {result.key}'\\)\nprint\\(f'Duration:     {result.duration_s:.1f}s'\\)\nprint\\(f'Beat count:   {len\\(result.beat_times\\)}'\\)\nprint\\(f'Downbeats:    {len\\(result.downbeat_times\\)}'\\)\n\nimport json\nmeta = json.loads\\(\\(result.output_dir / \\\\\"metadata.json\\\\\"\\).read_text\\(\\)\\)\nprint\\(f'metadata.json written: {list\\(meta.keys\\(\\)\\)}'\\)\nbeat_json = result.output_dir / 'beat_grid.json'\nprint\\(f'beat_grid.json written: {beat_json.exists\\(\\)}'\\)\n\")",
-      "Bash(.venv/bin/soundsplit /tmp/test_song.wav -o /tmp/test_cli_out --no-stems --no-midi 2>&1)"
+      "Bash(.venv/bin/soundsplit /tmp/test_song.wav -o /tmp/test_cli_out --no-stems --no-midi 2>&1)",
+      "Bash(SS=/Users/nikechukwu/Developer/Competitions/vandyhacks/26/backend/soundsplit)",
+      "Bash($SS/.venv/bin/python -c \"import mido; print\\(''mido'', mido.__version__\\)\")",
+      "Bash($SS/.venv/bin/python -c \"import pretty_midi; print\\(''pretty_midi ok''\\)\")",
+      "Bash($SS/.venv/bin/python -c \"from soundsplit import split; print\\(''soundsplit ok''\\)\")",
+      "Bash(SS=/Users/nikechukwu/Developer/Competitions/vandyhacks/26/backend/soundsplit $SS/.venv/bin/pip install -e \"$SS[all]\" -q)",
+      "Bash(SS=/Users/nikechukwu/Developer/Competitions/vandyhacks/26/backend/soundsplit $SS/.venv/bin/uv pip install -e \"$SS[all]\" mido -q)",
+      "Bash(SS=/Users/nikechukwu/Developer/Competitions/vandyhacks/26/backend/soundsplit uv pip install --python $SS/.venv/bin/python -e \"$SS[all]\" mido)",
+      "Bash(SS=/Users/nikechukwu/Developer/Competitions/vandyhacks/26/backend/soundsplit uv pip install --python \"$SS/.venv/bin/python\" mido)",
+      "Bash(SS=/Users/nikechukwu/Developer/Competitions/vandyhacks/26/backend/soundsplit uv pip install --python \"$SS/.venv/bin/python\" \"$SS[all]\")",
+      "Bash(PYBIN=/Users/nikechukwu/Developer/Competitions/vandyhacks/26/backend/soundsplit/.venv/bin/python uv pip install --python \"$PYBIN\" -e /Users/nikechukwu/Developer/Competitions/vandyhacks/26/backend/soundsplit)",
+      "Bash(PYBIN=/Users/nikechukwu/Developer/Competitions/vandyhacks/26/backend/soundsplit/.venv/bin/python)",
+      "Bash($PYBIN -c \":*)",
+      "Bash(/opt/homebrew/bin/ffprobe -version)",
+      "Bash(PYBIN=/Users/nikechukwu/Developer/Competitions/vandyhacks/26/backend/soundsplit/.venv/bin/python $PYBIN -c \":*)",
+      "Bash($PYBIN -c \"import noisereduce; print\\(''noisereduce'', noisereduce.__version__\\)\")",
+      "Bash(cp /tmp/ws_out2/midi/melody.mid \"/Users/nikechukwu/Desktop/watchingsummer_detected.mid\")",
+      "Bash(cp /tmp/hum_m4a_out4/midi/melody.mid \"/Users/nikechukwu/Desktop/hum_m4a_detected.mid\")",
+      "Bash(cp /tmp/hum_aifc_out4/midi/melody.mid \"/Users/nikechukwu/Desktop/hum_aifc_detected.mid\")",
+      "Bash(cp /tmp/watchingsummer_expected.mid \"/Users/nikechukwu/Desktop/watchingsummer_expected.mid\")",
+      "Bash(uv sync:*)",
+      "Bash(curl -s -X POST http://localhost:8001/split -F \"file=@/Users/nikechukwu/Desktop/hum.aifc\" -F \"input_type=auto\" -F \"midi=true\" -F \"beat_grid=true\" -F \"key=true\")",
+      "Bash(kill %1)"
     ]
   }
 }
