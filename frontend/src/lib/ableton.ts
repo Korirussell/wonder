@@ -50,7 +50,7 @@ export async function sendAbletonCommand(
 
 export async function isAbletonConnected(): Promise<boolean> {
   try {
-    await sendAbletonCommand("health_check", {});
+    await sendAbletonCommand("get_session_info", {});
     return true;
   } catch {
     return false;

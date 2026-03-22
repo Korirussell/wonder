@@ -85,15 +85,23 @@ export function updateStateAfterToolCall(
       }
       break;
 
-    case "load_browser_item":
-    case "load_plugin_by_name":
+    case "load_instrument_or_effect":
       const trackToLoadInstrument = newState.tracks.find(
         (t) => t.index === params.track_index
       );
       if (trackToLoadInstrument) {
-        trackToLoadInstrument.instrument =
-          (params.item_uri as string) || (params.plugin_name as string) || "Unknown";
+        trackToLoadInstrument.instrument = (params.uri as string) || "Unknown";
         trackToLoadInstrument.instrument_loaded = true;
+      }
+      break;
+
+    case "load_drum_kit":
+      const trackToLoadDrumKit = newState.tracks.find(
+        (t) => t.index === params.track_index
+      );
+      if (trackToLoadDrumKit) {
+        trackToLoadDrumKit.instrument = (params.kit_path as string) || "Drum Kit";
+        trackToLoadDrumKit.instrument_loaded = true;
       }
       break;
 
@@ -126,31 +134,33 @@ export function updateStateAfterToolCall(
       }
       break;
 
-    case "create_wonder_session":
-      // Extract session-level info from create_wonder_session params
-      if (params.bpm) newState.bpm = params.bpm as number;
-      if (params.swing) newState.swing = params.swing as number;
-      if (params.key_root !== undefined && params.scale) {
-        const keyMap = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
-        newState.key = keyMap[params.key_root as number] || "C";
-        newState.scale = params.scale as string;
-      }
-      // Tracks will be added via subsequent create_midi_track calls
+    case "delete_track": {
+      const deleteIdx = params.track_index as number;
+      newState.tracks = newState.tracks
+        .filter((t) => t.index !== deleteIdx)
+        .map((t) => ({
+          ...t,
+          // Shift indices down for tracks after the deleted one
+          index: t.index > deleteIdx ? t.index - 1 : t.index,
+        }));
       break;
+    }
 
-    case "generate_drum_pattern":
-    case "generate_bassline":
-      const trackWithPattern = newState.tracks.find(
-        (t) => t.index === params.track_index
-      );
-      if (trackWithPattern) {
-        const clip = trackWithPattern.clips.find(
-          (c) => c.index === params.clip_index
+    case "delete_clip": {
+      const trackForClipDelete = newState.tracks.find((t) => t.index === params.track_index);
+      if (trackForClipDelete) {
+        trackForClipDelete.clips = trackForClipDelete.clips.filter(
+          (c) => c.index !== (params.clip_index as number)
         );
-        if (clip) {
-          clip.pattern_type = (params.style as string) || (params.root as string) || "generated";
-        }
       }
+      break;
+    }
+
+    case "get_track_info":
+    case "get_browser_tree":
+    case "get_browser_items_at_path":
+    case "search_browser":
+      // Read-only tools — no state update needed
       break;
   }
 

@@ -361,12 +361,32 @@ export function validateBeforeExecution(
       break;
     }
 
-    case "create_midi_track":
-    case "create_audio_track": {
+    case "create_midi_track": {
       const index = params.index as number;
-      if (index < 0) {
+      if (index < -1) {
         result.valid = false;
-        result.errors.push("Track index must be non-negative");
+        result.errors.push("Track index must be -1 (append) or non-negative");
+      }
+      break;
+    }
+
+    case "set_tempo": {
+      const tempo = params.tempo as number;
+      if (tempo < 60 || tempo > 200) {
+        result.warnings.push(`Tempo ${tempo} BPM is outside the typical range (60-200). This may be intentional.`);
+      }
+      if (tempo <= 0) {
+        result.valid = false;
+        result.errors.push("Tempo must be a positive number.");
+      }
+      break;
+    }
+
+    case "delete_track": {
+      const trackIndex = params.track_index as number;
+      const trackExists = sessionState.tracks.some((t) => t.index === trackIndex);
+      if (!trackExists) {
+        result.warnings.push(`Track ${trackIndex} is not in local session state — call get_session_info to confirm it exists before deleting.`);
       }
       break;
     }

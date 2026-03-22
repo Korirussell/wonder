@@ -7,10 +7,21 @@ interface TrackColumnProps {
   track: Track;
   index: number;
   onUpdate: (id: number, patch: Partial<Track>) => void;
+  onAbletonCommand?: (cmd: string, params: Record<string, unknown>) => void;
 }
 
-export default function TrackColumn({ track, index, onUpdate }: TrackColumnProps) {
+export default function TrackColumn({ track, index, onUpdate, onAbletonCommand }: TrackColumnProps) {
   const faderTop = `${Math.round((1 - track.volume) * 70)}%`;
+
+  const handleMute = () => {
+    const next = !track.mute;
+    onUpdate(track.id, { mute: next });
+    onAbletonCommand?.("set_track_mute", { track_index: index, mute: next });
+  };
+
+  // Solo/Arm: optimistic-only (not confirmed in ableton-mcp allowlist yet)
+  const handleSolo = () => onUpdate(track.id, { solo: !track.solo });
+  const handleArm = () => onUpdate(track.id, { armed: !track.armed });
 
   return (
     <article className="w-52 flex-shrink-0 bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow flex flex-col overflow-hidden">
@@ -40,7 +51,7 @@ export default function TrackColumn({ track, index, onUpdate }: TrackColumnProps
         {/* M S A buttons */}
         <div className="flex gap-2">
           <button
-            onClick={() => onUpdate(track.id, { mute: !track.mute })}
+            onClick={handleMute}
             className={`w-9 h-9 border-2 border-[#2D2D2D] rounded-lg flex items-center justify-center font-mono text-xs font-bold interactive-push ${
               track.mute ? "bg-[#FEF08A]" : "bg-white"
             }`}
@@ -48,7 +59,7 @@ export default function TrackColumn({ track, index, onUpdate }: TrackColumnProps
             M
           </button>
           <button
-            onClick={() => onUpdate(track.id, { solo: !track.solo })}
+            onClick={handleSolo}
             className={`w-9 h-9 border-2 border-[#2D2D2D] rounded-lg flex items-center justify-center font-mono text-xs font-bold interactive-push ${
               track.solo ? "bg-[#C1E1C1] hard-shadow-sm" : "bg-white"
             }`}
@@ -56,7 +67,7 @@ export default function TrackColumn({ track, index, onUpdate }: TrackColumnProps
             S
           </button>
           <button
-            onClick={() => onUpdate(track.id, { armed: !track.armed })}
+            onClick={handleArm}
             className={`w-9 h-9 border-2 rounded-lg flex items-center justify-center font-mono text-xs font-bold interactive-push ${
               track.armed
                 ? "bg-[#fa7150]/20 border-[#fa7150] border-dashed text-[#aa371c]"

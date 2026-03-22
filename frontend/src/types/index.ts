@@ -17,12 +17,27 @@ export interface SessionState {
   isPlaying: boolean;
 }
 
+export interface ToolLogEntry {
+  icon: string;
+  message: string;
+  success: boolean;
+  toolName?: string;
+}
+
+export interface ChatResponse {
+  content: string;
+  toolLog?: ToolLogEntry[];
+  suggestions?: string[];
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
   isGreeting?: boolean; // If true, don't send to Gemini (just display)
+  toolLog?: ToolLogEntry[];
+  suggestions?: string[];
 }
 
 export interface TranscribedNote {

@@ -11,93 +11,92 @@ import {
 } from "@/lib/sessionState";
 import { validateBeforeExecution } from "@/lib/musicValidator";
 
-// Python REST API server URL
-const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
+/**
+ * Map Gemini tool names to the Ableton Remote Script command names.
+ * Most are 1:1, but load_instrument_or_effect and load_drum_kit differ.
+ */
+const TOOL_TO_COMMAND: Record<string, string> = {
+  load_instrument_or_effect: "load_browser_item",
+};
 
-// Compact summary of transcribed notes
-interface NotesSummary {
-  note_count: number;
-  pitch_range?: [string, string];
-  duration_beats?: number;
-  first_notes?: string[];
-}
-
-// MIDI context passed from frontend (lightweight reference instead of full notes)
-interface MidiContext {
-  midi_id: string;
-  midi_path: string;
-  note_count: number;
-  notes_summary: NotesSummary;
-  suggested_clip_length: number;
-  tempo_bpm: number;
-}
-
-// Call Python REST API for non-Ableton tools (like load_midi_notes)
-async function callPythonApi(endpoint: string, args: Record<string, unknown>): Promise<unknown> {
-  const res = await fetch(`${PYTHON_API_URL}${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(args),
-  });
-  
-  if (!res.ok) {
-    throw new Error(`Python API error: ${res.status} ${res.statusText}`);
+/**
+ * Translate tool args to the format the Remote Script expects.
+ * e.g. load_instrument_or_effect uses {uri} but Remote Script expects {item_uri}.
+ */
+function translateArgs(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (toolName === "load_instrument_or_effect") {
+    return { track_index: args.track_index, item_uri: args.uri };
   }
-  
-  return res.json();
+  return args;
 }
 
-// Build compact context for transcribed MIDI (token-optimized)
-function buildMidiContext(ctx: MidiContext): string {
-  const pitchRange = ctx.notes_summary.pitch_range 
-    ? `${ctx.notes_summary.pitch_range[0]} to ${ctx.notes_summary.pitch_range[1]}`
-    : "unknown";
-  const firstNotes = ctx.notes_summary.first_notes?.join(", ") || "unknown";
-  
-  return `
+/**
+ * Execute load_drum_kit as a multi-step composite (matches kori-mcp logic).
+ */
+async function executeLoadDrumKit(args: Record<string, unknown>): Promise<unknown> {
+  const trackIndex = args.track_index as number;
+  const rackUri = args.rack_uri as string;
+  const kitPath = args.kit_path as string;
 
-USER'S HUMMED MELODY (midi_id: ${ctx.midi_id}):
-- ${ctx.note_count} notes detected
-- Pitch range: ${pitchRange}
-- Duration: ${ctx.notes_summary.duration_beats?.toFixed(1) || "?"} beats
-- First notes: ${firstNotes}
-- Suggested clip length: ${ctx.suggested_clip_length} beats
-- Detected tempo: ${ctx.tempo_bpm} BPM
+  // Step 1: Load the drum rack
+  const rackResult = await sendAbletonCommand("load_browser_item", {
+    track_index: trackIndex,
+    item_uri: rackUri,
+  }) as Record<string, unknown>;
 
-TO ADD THIS MELODY TO ABLETON:
-1. First call load_midi_notes with midi_id="${ctx.midi_id}" to get the notes array
-2. Create a MIDI track and clip
-3. Use add_notes_to_clip with the notes array from step 1`;
+  if (!rackResult?.loaded) {
+    throw new Error(`Failed to load drum rack with URI '${rackUri}'`);
+  }
+
+  // Step 2: Browse for the kit
+  const kitResult = await sendAbletonCommand("get_browser_items_at_path", {
+    path: kitPath,
+  }) as Record<string, unknown>;
+
+  if (kitResult?.error) {
+    return { message: `Loaded drum rack but failed to find drum kit: ${kitResult.error}` };
+  }
+
+  // Step 3: Find a loadable kit
+  const kitItems = (kitResult?.items as Array<Record<string, unknown>>) ?? [];
+  const loadable = kitItems.filter((item) => item.is_loadable);
+  if (loadable.length === 0) {
+    return { message: `Loaded drum rack but no loadable kits found at '${kitPath}'` };
+  }
+
+  // Step 4: Load the first kit
+  await sendAbletonCommand("load_browser_item", {
+    track_index: trackIndex,
+    item_uri: loadable[0].uri,
+  });
+
+  return { message: `Loaded drum rack and kit '${loadable[0].name}' on track ${trackIndex}` };
 }
 
 const WONDER_SYSTEM_PROMPT = `You are Wonder — an AI music production copilot embedded in Ableton Live.
 You are "Cursor for music production."
 
-You have DIRECT CONTROL over Ableton Live including all devices and VST plugins. When a user asks you to make music or design sounds, DO IT — call the tools immediately. Never say you "can't" do something without trying the tools first.
+You have DIRECT CONTROL over Ableton Live. When a user asks you to make music, DO IT — call the tools immediately. Never say you "can't" do something without trying the tools first.
 
 ## Core rules
-- When asked to "make a beat", "create a track", "build a session" → call create_wonder_session right away
-- Always call get_session_info first to get current track count before creating tracks manually
+- Always call get_session_info first to understand the current state before creating tracks
 - ALWAYS call create_clip BEFORE add_notes_to_clip — the clip must exist first
+- ALWAYS load an instrument via load_instrument_or_effect BEFORE adding MIDI notes — otherwise there's no sound
+- To discover instruments, use get_browser_tree then get_browser_items_at_path to find URIs, then load_instrument_or_effect
+- For drum kits, use load_drum_kit with the rack URI and kit path
 - If a tool returns an error, read the error and retry with corrected parameters — never give up after one failure
 - Be concise and direct — you're a producer, not a chatbot
 
-## VST / Device parameter control — YOU CAN DO THIS
-You can read and set ANY parameter on ANY device including Serum, Massive, Vital, Wavetable, and all Ableton devices.
-
-Workflow:
-1. Call get_device_parameters(track_index, device_index=0) to see all available parameters with their names, indices, and current values
-2. Call set_device_parameter(track_index, device_index, parameter_index, value) to change a parameter
-
-Serum 808 design — after getting parameters, set approximately:
-- Osc A waveform → Sine or custom (parameter named "Osc A Wt Pos" or similar)
-- Amp Env Attack → 0.0 (instant attack)
-- Amp Env Decay → 0.7-0.9 (long decay for 808 tail)
-- Amp Env Sustain → 0.0 (no sustain — all in the decay)
-- Amp Env Release → 0.3
-- Filter Cutoff → 0.4-0.6 for that low-pass warmth
-- Pitch/Tune → set for the desired root note
-Always call get_device_parameters first to find the exact parameter indices for the loaded Serum patch.
+## Workflow: Making a beat from scratch
+1. get_session_info → know the current state
+2. set_tempo → set the BPM
+3. create_midi_track → make tracks for drums, bass, chords, melody
+4. set_track_name → label each track
+5. get_browser_tree / get_browser_items_at_path → find instruments
+6. load_instrument_or_effect or load_drum_kit → load instruments on tracks
+7. create_clip → create clips on each track
+8. add_notes_to_clip → write MIDI patterns
+9. fire_clip or start_playback → play it back
 
 ## MIDI note format for add_notes_to_clip
 Notes MUST be objects:
@@ -112,13 +111,28 @@ Notes MUST be objects:
 Kick:36, Snare:38, HH closed:42, HH open:46, Clap:39, Crash:49, Ride:51
 
 ## Scales (intervals from root)
-Minor: 0,2,3,5,7,8,10 | Pentatonic minor: 0,3,5,7,10 | Major: 0,2,4,5,7,9,11`;
+Minor: 0,2,3,5,7,8,10 | Pentatonic minor: 0,3,5,7,10 | Major: 0,2,4,5,7,9,11
 
-const MAX_TOOL_ROUNDS = 10;
+## Style knowledge
+- **Trap**: 130-145 BPM, minor scale, 808 kick (pitch 36), snare on 3, hi-hat rolls (16th/32nd), dark arpeggios
+- **Lo-fi**: 75-95 BPM, jazz chords, vinyl-warm pads, swung 16ths, subtle key: C/F/Bb minor
+- **Hans Zimmer / Cinematic**: 60-100 BPM, slow build, thick strings + brass, epic hits on beat 1, minor/phrygian
+- **House**: 120-130 BPM, 4-on-the-floor kick (36 at 0,1,2,3), offbeat hi-hats (42 at 0.5,1.5,2.5,3.5), bass stabs
+- **Boom-bap**: 85-95 BPM, strong kick/snare, jazz samples, swing 60-70%
+- **Drill**: 140-150 BPM, sliding 808 bass, fast trap hi-hats, minimal chords
+
+## Deleting
+- To delete a track: call delete_track with track_index
+- To clear a clip: call delete_clip with track_index and clip_index
+
+## Finding instruments
+- To find a specific preset: call search_browser with the name, then use the returned URI in load_instrument_or_effect
+- Example: search_browser("Wavetable") → get URI → load_instrument_or_effect(track_index, uri)`;
+
+const MAX_TOOL_ROUNDS = 30;
 
 /**
  * Normalize notes Gemini sends into object format the Remote Script expects.
- * AbletonMCP expects [{ pitch, start_time, duration, velocity, mute }, ...]
  */
 function normalizeNotes(notes: unknown): Array<Record<string, unknown>> {
   let rawNotes: unknown = notes;
@@ -172,30 +186,20 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { messages, audioData, mimeType, midiContext } = await req.json() as {
+    const { messages } = await req.json() as {
       messages: Array<{ role: "user" | "assistant"; content: string }>;
-      audioData?: string;
-      mimeType?: string;
-      midiContext?: MidiContext;
     };
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    
-    // Build enhanced system prompt with wonder.md knowledge
-    let enhancedPrompt = buildSystemPromptWithKnowledge(WONDER_SYSTEM_PROMPT);
-    
-    // Add MIDI context if provided
-    if (midiContext && midiContext.note_count > 0) {
-      enhancedPrompt += buildMidiContext(midiContext);
-    }
-    
+    const enhancedPrompt = buildSystemPromptWithKnowledge(WONDER_SYSTEM_PROMPT);
+
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
       systemInstruction: enhancedPrompt,
       tools: [{ functionDeclarations: WONDER_TOOL_DECLARATIONS }],
       toolConfig: { functionCallingConfig: { mode: FunctionCallingMode.AUTO } },
     });
-    
+
     // Initialize session state tracker
     let sessionState: SessionState = createInitialState();
 
@@ -209,10 +213,10 @@ export async function POST(req: NextRequest) {
     const history: Content[] = firstUserIdx >= 0 ? rawHistory.slice(firstUserIdx) : [];
 
     const lastMessage = messages[messages.length - 1];
-    
+
     // Only inject session state if there's existing history
     let historyWithState: Content[] = history;
-    
+
     if (history.length > 0) {
       historyWithState = [
         ...history,
@@ -228,56 +232,44 @@ export async function POST(req: NextRequest) {
         }
       ];
     }
-    
+
     const chat = model.startChat({ history: historyWithState });
 
     // ── Agentic loop ──────────────────────────────────────────────────────────
     let response;
-    
+
     console.log(`[Wonder] Sending message: "${lastMessage.content.slice(0, 100)}..."`);
-    
-    if (audioData && mimeType) {
-      // Send audio directly to Gemini for understanding
-      const audioPart = {
-        inlineData: {
-          data: audioData,
-          mimeType: mimeType,
-        },
-      };
-      response = await chat.sendMessage([
-        audioPart,
-        { text: "Listen to this audio and understand what the user wants. If they're humming a melody, transcribe it to MIDI notes. If they're speaking, follow their instructions to create music in Ableton." },
-      ]);
-    } else {
-      response = await chat.sendMessage(lastMessage.content);
-    }
-    
+    response = await chat.sendMessage(lastMessage.content);
     console.log(`[Wonder] Response candidates:`, response.response.candidates?.length || 0);
-    
+
     let toolRounds = 0;
 
     while (toolRounds < MAX_TOOL_ROUNDS) {
       const candidate = response.response.candidates?.[0];
-      if (!candidate) break;
-      
+      if (!candidate) {
+        console.log("[Wonder] No candidate in response - stopping tool loop");
+        break;
+      }
+
       // Check if candidate has content and parts
       if (!candidate.content || !candidate.content.parts) {
         console.error("[Wonder] No content.parts in candidate");
-        console.error("[Wonder] Candidate:", JSON.stringify(candidate, null, 2));
         try {
           const finalText = response.response.text();
-          console.log("[Wonder] Returning text response:", finalText.slice(0, 200));
           return NextResponse.json({ content: finalText });
         } catch (textErr) {
           console.error("[Wonder] Failed to get text from response:", textErr);
-          return NextResponse.json({ 
-            content: "I encountered an error processing your request. Please try again with a simpler prompt like 'make a lofi beat'." 
+          return NextResponse.json({
+            content: "I encountered an error processing your request. Please try again with a simpler prompt like 'make a lofi beat'."
           }, { status: 500 });
         }
       }
 
       const functionCalls = candidate.content.parts.filter((p) => p.functionCall);
-      if (functionCalls.length === 0) break;
+      if (functionCalls.length === 0) {
+        console.log(`[Wonder] No more function calls after ${toolRounds} rounds - Gemini finished`);
+        break;
+      }
 
       toolRounds++;
 
@@ -291,19 +283,11 @@ export async function POST(req: NextRequest) {
             args.notes = normalizeNotes(args.notes);
           }
 
-          // Auto-load notes from midi_id if Gemini forgot to pass notes
-          if (call.name === "add_notes_to_clip" && !args.notes && typeof args.midi_id === "string") {
-            const loaded = await callPythonApi("/api/load_midi_notes", { midi_id: args.midi_id });
-            if (loaded && typeof loaded === "object" && Array.isArray((loaded as { notes?: unknown[] }).notes)) {
-              args.notes = normalizeNotes((loaded as { notes: unknown[] }).notes);
-            }
-          }
-
           console.log(`[Wonder] → ${call.name}`, JSON.stringify(args).slice(0, 200));
 
           // Validate before execution
           const validation = validateBeforeExecution(call.name, args, sessionState);
-          
+
           if (!validation.valid) {
             console.error(`[Wonder] ✗ Validation failed for ${call.name}:`, validation.errors);
             return {
@@ -312,13 +296,12 @@ export async function POST(req: NextRequest) {
                 response: {
                   error: `Validation failed: ${validation.errors.join(", ")}`,
                   warnings: validation.warnings,
-                  hint: "Fix the validation errors before retrying. Check session state and music theory rules.",
+                  hint: "Fix the validation errors before retrying.",
                 },
               },
             };
           }
-          
-          // Log warnings but continue
+
           if (validation.warnings.length > 0) {
             console.warn(`[Wonder] ⚠ Warnings for ${call.name}:`, validation.warnings);
           }
@@ -326,21 +309,21 @@ export async function POST(req: NextRequest) {
           try {
             let result: unknown;
 
-            // Route to appropriate backend based on tool name
-            if (call.name === "load_midi_notes") {
-              // Call Python REST API for MIDI file operations
-              result = await callPythonApi("/api/load_midi_notes", args);
+            if (call.name === "load_drum_kit") {
+              // Composite command — multi-step execution
+              result = await executeLoadDrumKit(args);
             } else {
-              // Call Ableton socket for all other tools
-              result = await sendAbletonCommand(call.name, args);
+              // Translate tool name → Ableton command name and args
+              const cmdName = TOOL_TO_COMMAND[call.name] ?? call.name;
+              const cmdArgs = translateArgs(call.name, args);
+              result = await sendAbletonCommand(cmdName, cmdArgs);
             }
 
             console.log(`[Wonder] ✓ ${call.name}:`, JSON.stringify(result).slice(0, 100));
-            
+
             // Update session state after successful execution
             sessionState = updateStateAfterToolCall(sessionState, call.name, args, result);
-            console.log(`[Wonder] 📊 Session state updated:`, serializeState(sessionState).slice(0, 200));
-            
+
             return {
               functionResponse: {
                 name: call.name,
@@ -370,11 +353,55 @@ export async function POST(req: NextRequest) {
       response = await chat.sendMessage(toolResults);
     }
 
-    const finalText = response.response.text();
+    // Extract final text response
+    let finalText = "";
+    try {
+      finalText = response.response.text();
+      console.log(`[Wonder] Final response length: ${finalText.length} chars`);
+    } catch (textErr) {
+      console.error("[Wonder] Failed to extract text from response:", textErr);
+      console.error("[Wonder] Response object:", JSON.stringify(response.response, null, 2));
+      
+      // Try to get any text from parts
+      const candidate = response.response.candidates?.[0];
+      if (candidate?.content?.parts) {
+        const textParts = candidate.content.parts
+          .filter((p) => p.text)
+          .map((p) => p.text)
+          .join("");
+        if (textParts) {
+          finalText = textParts;
+          console.log(`[Wonder] Recovered text from parts: ${textParts.length} chars`);
+        }
+      }
+      
+      if (!finalText) {
+        return NextResponse.json({ 
+          content: "I completed the actions but encountered an error generating a response. Please check Ableton to see the changes." 
+        });
+      }
+    }
+
+    if (!finalText || finalText.trim().length === 0) {
+      console.warn("[Wonder] Empty response text after tool execution");
+      return NextResponse.json({ 
+        content: "I completed the requested actions in Ableton. Please check your session." 
+      });
+    }
+
     return NextResponse.json({ content: finalText });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("Wonder chat error:", message);
+    console.error("Wonder chat error stack:", err instanceof Error ? err.stack : "No stack trace");
+    
+    // Handle rate limit specifically
+    if (message.includes("429") || message.includes("quota") || message.includes("exceeded")) {
+      return NextResponse.json({ 
+        content: "⚠️ Rate limit exceeded. Free tier allows 20 requests per day. Upgrade at https://ai.google.dev/pricing for unlimited usage, or wait for the daily reset." 
+      }, { status: 429 });
+    }
+    
     return NextResponse.json({ content: `Error: ${message}` }, { status: 500 });
   }
 }
@@ -386,11 +413,20 @@ function getHint(toolName: string, error: string): string {
     if (error.includes("index") || error.includes("range")) return "Check track_index and clip_index — call get_session_info to verify track count.";
     return "Ensure notes is an array of objects with pitch/start_time/duration/velocity/mute and the clip was created first with create_clip.";
   }
-  if (toolName === "create_midi_track" || toolName === "create_audio_track") {
-    return "Call get_session_info first and use track_count as the index.";
+  if (toolName === "create_midi_track") {
+    return "Call get_session_info first and use track_count as the index, or pass -1 to append.";
   }
-  if (toolName === "load_browser_item") {
-    return "Get the URI first via get_browser_items_at_path, then pass it as item_uri.";
+  if (toolName === "load_instrument_or_effect") {
+    return "Use search_browser to find the instrument by name and get its URI, then pass uri to this tool.";
+  }
+  if (toolName === "delete_track") {
+    return "Call get_session_info first to verify the track index, then call delete_track.";
+  }
+  if (toolName === "delete_clip") {
+    return "Verify track_index and clip_index via get_session_info before deleting.";
+  }
+  if (toolName === "search_browser") {
+    return "Provide a simpler query string (e.g. 'Wavetable' instead of a full path). Optionally specify category.";
   }
   return "Read the error and retry with corrected parameters.";
 }
