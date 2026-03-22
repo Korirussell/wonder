@@ -2,6 +2,8 @@
 
 import { Track } from "@/types";
 import DevicePill from "./DevicePill";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 interface TrackColumnProps {
   track: Track;
@@ -12,10 +14,25 @@ interface TrackColumnProps {
 export default function TrackColumn({ track, index, onUpdate }: TrackColumnProps) {
   const faderTop = `${Math.round((1 - track.volume) * 70)}%`;
 
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: track.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
   return (
-    <article className="w-52 flex-shrink-0 bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="p-4 border-b-2 border-[#2D2D2D] bg-stone-50 flex justify-between items-center">
+    <article
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      className="flex-1 min-w-[200px] self-stretch bg-white border-2 border-[#2D2D2D] rounded-2xl hard-shadow flex flex-col overflow-hidden"
+    >
+      {/* Header — drag handle */}
+      <div
+        {...listeners}
+        className="p-4 border-b-2 border-[#2D2D2D] bg-stone-50 flex justify-between items-center cursor-grab active:cursor-grabbing"
+      >
         <div>
           <span className="font-mono text-[10px] font-bold text-stone-400 block">
             {String(index + 1).padStart(2, "0")}

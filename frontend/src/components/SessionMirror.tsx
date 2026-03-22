@@ -2,7 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { Play, Square, Circle } from "lucide-react";
+import { DndContext, closestCenter, DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import TrackColumn from "./TrackColumn";
+import TempoModal from "./TempoModal";
 import { Track, SessionState } from "@/types";
 
 const MOCK_TRACKS: Track[] = [
@@ -65,6 +68,18 @@ export default function SessionMirror() {
     }));
   };
 
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setSession((s) => {
+        const oldIndex = s.tracks.findIndex((t) => t.id === active.id);
+        const newIndex = s.tracks.findIndex((t) => t.id === over.id);
+        return { ...s, tracks: arrayMove(s.tracks, oldIndex, newIndex) };
+      });
+    }
+  };
+
+  const [showTempoModal, setShowTempoModal] = useState(false);
   const [abletonConnected, setAbletonConnected] = useState(false);
 
   // Poll Ableton state every 2 seconds and sync to UI
@@ -98,14 +113,17 @@ export default function SessionMirror() {
       {/* Top HUD */}
       <header className="px-8 pt-6 pb-4 flex justify-between items-center flex-shrink-0 border-b-2 border-[#2D2D2D]/10">
         <div className="flex gap-3">
-          <div className="bg-white border-2 border-[#2D2D2D] px-4 py-2 rounded-xl hard-shadow-sm flex flex-col">
+          <button
+            onClick={() => setShowTempoModal(true)}
+            className="bg-white border-2 border-[#2D2D2D] px-4 py-2 rounded-xl hard-shadow-sm flex flex-col cursor-pointer hover:bg-stone-50 transition-colors interactive-push"
+          >
             <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-stone-400 mb-0.5">
               Tempo
             </span>
             <span className="font-mono text-xl font-bold leading-none">
               {session.bpm.toFixed(2)}
             </span>
-          </div>
+          </button>
           <div className="bg-white border-2 border-[#2D2D2D] px-4 py-2 rounded-xl hard-shadow-sm flex flex-col">
             <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-stone-400 mb-0.5">
               Key
@@ -141,18 +159,22 @@ export default function SessionMirror() {
       </header>
 
       {/* Track grid */}
-      <div className="flex-1 px-8 pt-6 pb-28 overflow-x-auto custom-scrollbar flex gap-5 items-start">
-        {session.tracks.map((track, i) => (
-          <TrackColumn
-            key={track.id}
-            track={track}
-            index={i}
-            onUpdate={updateTrack}
-          />
-        ))}
+      <div className="flex-1 px-8 pt-6 pb-28 overflow-y-auto custom-scrollbar flex flex-wrap gap-4 content-start">
+        <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={session.tracks.map((t) => t.id)} strategy={rectSortingStrategy}>
+            {session.tracks.map((track, i) => (
+              <TrackColumn
+                key={track.id}
+                track={track}
+                index={i}
+                onUpdate={updateTrack}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
 
         {/* Add track placeholder */}
-        <div className="w-52 flex-shrink-0 h-64 border-2 border-dashed border-[#2D2D2D]/30 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#2D2D2D]/60 hover:bg-white/40 transition-all group">
+        <div className="flex-1 min-w-[200px] h-64 border-2 border-dashed border-[#2D2D2D]/30 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#2D2D2D]/60 hover:bg-white/40 transition-all group">
           <span className="font-mono text-xs text-stone-400 group-hover:text-stone-600 transition-colors">
             + new track
           </span>
@@ -178,6 +200,13 @@ export default function SessionMirror() {
           {session.isPlaying ? "▶ PLAYING" : "◼ STOPPED"}
         </span>
       </div>
+      {showTempoModal && (
+        <TempoModal
+          initialBpm={session.bpm}
+          onConfirm={(newBpm) => setSession((s) => ({ ...s, bpm: newBpm }))}
+          onClose={() => setShowTempoModal(false)}
+        />
+      )}
     </section>
   );
 }
