@@ -13,7 +13,8 @@ load_dotenv(_REPO_ROOT / ".env")
 
 
 def mongodb_uri() -> str | None:
-    raw = os.getenv("MONGODB_URI", "").strip()
+    # Accept MONGODB_URI (preferred) or MONGO_URI (used by the agent package)
+    raw = (os.getenv("MONGODB_URI") or os.getenv("MONGO_URI") or "").strip()
     return raw or None
 
 

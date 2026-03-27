@@ -1,0 +1,2 @@
+[console_scripts]
+ableton-mcp = MCP_Server.server:main

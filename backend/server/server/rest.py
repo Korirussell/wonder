@@ -8,18 +8,35 @@ Run:
 """
 from __future__ import annotations
 
+import asyncio
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ._handlers import OUTPUT_ROOT, handle_generate, handle_split, handle_split_and_generate
+from .mongo.models import (
+    ChatLogRequest,
+    FeedbackRequest,
+    SessionAppendTurn,
+    SessionCreate,
+    SessionTurn,
+    UserReport,
+)
+from .mongo.repository import get_repository
+from .mongo.snowflake_client import emit_events
+from .mongo.snowflake_events import (
+    message_feedback_to_event,
+    session_document_to_analytics_events,
+    sound_saved_to_event,
+    user_report_to_event,
+)
 from .utils.audio_to_midi import get_midi_file_path, transcribe_audio_base64
 
 app = FastAPI(
@@ -55,6 +72,103 @@ def health_mongo() -> dict[str, object]:
     from .mongo import mongo_health
 
     return mongo_health()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _doc(d: dict | None) -> dict:
+    """Strip the non-serialisable MongoDB ``_id`` field from a document."""
+    if d is None:
+        return {}
+    d.pop("_id", None)
+    return d
+
+
+def _repo():
+    """Return the shared repository or raise 503 if MongoDB is not configured."""
+    from .mongo import get_repository
+    r = get_repository()
+    if r is None:
+        raise HTTPException(status_code=503, detail="MongoDB not configured (set MONGODB_URI or MONGO_URI)")
+    return r
+
+
+# ---------------------------------------------------------------------------
+# /users
+# ---------------------------------------------------------------------------
+
+from .mongo.models import UserUpsert  # noqa: E402
+
+
+@app.post("/users", status_code=201)
+def upsert_user(payload: UserUpsert) -> dict:
+    """Create or update a user by auth_subject."""
+    return _doc(_repo().upsert_user(payload))
+
+
+@app.get("/users/{auth_subject}")
+def get_user(auth_subject: str) -> dict:
+    """Fetch a user by their auth provider subject."""
+    user = _repo().get_user_by_auth_subject(auth_subject)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User not found: {auth_subject}")
+    return _doc(user)
+
+
+# ---------------------------------------------------------------------------
+# /samples
+# ---------------------------------------------------------------------------
+
+from .mongo.models import SampleUpsert  # noqa: E402
+
+
+@app.post("/samples", status_code=201)
+def upsert_sample(payload: SampleUpsert) -> dict:
+    """Index or update a sample for a user."""
+    return _doc(_repo().upsert_sample(payload))
+
+
+@app.get("/samples")
+def list_samples(
+    user_id: str = Query(..., description="User ID to list samples for"),
+    limit: int = Query(100, ge=1, le=1000),
+    skip: int = Query(0, ge=0),
+) -> list[dict]:
+    """List samples for a user, newest first."""
+    return [_doc(s) for s in _repo().list_samples_for_user(user_id, limit=limit, skip=skip)]
+
+
+# ---------------------------------------------------------------------------
+# /sessions
+# ---------------------------------------------------------------------------
+
+from .mongo.models import SessionAppendTurn, SessionCreate  # noqa: E402
+
+
+@app.post("/sessions", status_code=201)
+def create_session(payload: SessionCreate) -> dict:
+    """Create a new copilot session (idempotent by session_id)."""
+    return _doc(_repo().create_session(payload))
+
+
+@app.get("/sessions/{session_id}")
+def get_session(session_id: str) -> dict:
+    """Fetch a session by its ID."""
+    session = _repo().get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return _doc(session)
+
+
+@app.post("/sessions/{session_id}/turns")
+def append_turn(session_id: str, body: SessionAppendTurn) -> dict:
+    """Append a turn to an existing session."""
+    result = _repo().append_session_turn(session_id, body)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return _doc(result)
 
 
 # ---------------------------------------------------------------------------
@@ -204,36 +318,14 @@ async def get_midi_notes(midi_id: str) -> dict[str, Any]:
     Retrieve notes for a previously transcribed MIDI file by its ID.
     Returns notes in the same format as POST /transcribe.
     """
-    import pretty_midi
+    from .utils.audio_to_midi import parse_midi_file_to_notes
 
     midi_path = get_midi_file_path(midi_id)
     if not midi_path:
         raise HTTPException(status_code=404, detail=f"MIDI not found: {midi_id}")
 
     try:
-        pm = pretty_midi.PrettyMIDI(midi_path)
-        _, tempos = pm.get_tempo_change_times()
-        tempo_bpm = float(tempos[0]) if len(tempos) > 0 else 120.0
-        beats_per_second = tempo_bpm / 60.0
-
-        notes = []
-        for instrument in pm.instruments:
-            for note in instrument.notes:
-                notes.append({
-                    "pitch": note.pitch,
-                    "start_time": round(note.start * beats_per_second, 4),
-                    "duration": round((note.end - note.start) * beats_per_second, 4),
-                    "velocity": note.velocity,
-                    "mute": False,
-                })
-
-        return {
-            "success": True,
-            "midi_id": midi_id,
-            "notes": notes,
-            "note_count": len(notes),
-            "tempo_bpm": tempo_bpm,
-        }
+        return parse_midi_file_to_notes(midi_path)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -254,6 +346,146 @@ def download_file(path: str) -> FileResponse:
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
     return FileResponse(str(p), filename=p.name)
+
+
+# ---------------------------------------------------------------------------
+# /session/new, /session/{id}, /chat  — MongoDB session persistence
+# ---------------------------------------------------------------------------
+
+
+@app.post("/session/new", status_code=201)
+async def create_session(body: SessionCreate) -> dict[str, Any]:
+    """Create or retrieve a chat session in MongoDB (idempotent via session_id)."""
+    repo = get_repository()
+    if repo is None:
+        return {"ok": False, "detail": "MongoDB not configured"}
+    doc = repo.create_session(body)
+    return {"ok": True, "session_id": doc["session_id"]}
+
+
+@app.get("/session/{session_id}")
+async def get_session(session_id: str) -> dict[str, Any]:
+    """Fetch a session document by its ID."""
+    repo = get_repository()
+    if repo is None:
+        raise HTTPException(status_code=503, detail="MongoDB not configured")
+    doc = repo.get_session(session_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    doc.pop("_id", None)
+    return doc
+
+
+@app.post("/chat")
+async def log_chat_turn(body: ChatLogRequest) -> dict[str, Any]:
+    """
+    Fire-and-forget endpoint called by the Next.js chat route after each AI response.
+    Appends the assistant turn to MongoDB and emits Snowflake analytics events.
+    """
+    repo = get_repository()
+    if repo is None:
+        return {"ok": False}
+
+    turn = SessionAppendTurn(
+        turn=SessionTurn(
+            role="assistant",
+            content=body.response,
+        )
+    )
+    doc = repo.append_session_turn(body.session_id, turn)
+
+    snowflake_rows: list[dict[str, Any]] = []
+    if doc:
+        snowflake_rows.extend(session_document_to_analytics_events(doc))
+
+    # Emit sound_saved events for any sounds generated during this turn
+    for se in body.sound_events:
+        turn_index = len(doc.get("turns", [])) - 1 if doc else 0
+        snowflake_rows.append(
+            sound_saved_to_event(
+                user_id=body.user_id,
+                session_id=body.session_id,
+                turn_index=max(turn_index, 0),
+                description=se.get("description", ""),
+                ableton_uri=se.get("ableton_uri"),
+                success=se.get("success", True),
+            )
+        )
+
+    if snowflake_rows:
+        asyncio.create_task(asyncio.to_thread(emit_events, snowflake_rows))
+
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# /events/feedback  — per-message thumbs up/down
+# ---------------------------------------------------------------------------
+
+
+@app.post("/events/feedback")
+async def record_feedback(body: FeedbackRequest) -> dict[str, Any]:
+    """Save message feedback to MongoDB and emit a Snowflake event."""
+    repo = get_repository()
+    if repo is None:
+        return {"ok": False, "detail": "MongoDB not configured"}
+
+    updated = repo.update_turn_feedback(
+        body.session_id,
+        body.turn_index,
+        body.feedback,
+        body.message_id,
+    )
+
+    event = message_feedback_to_event(
+        user_id=body.user_id,
+        session_id=body.session_id,
+        message_id=body.message_id,
+        turn_index=body.turn_index,
+        feedback=body.feedback,
+    )
+    asyncio.create_task(asyncio.to_thread(emit_events, [event]))
+
+    return {"ok": True, "updated": updated}
+
+
+# ---------------------------------------------------------------------------
+# /analytics/user/{user_id}  — per-user stats
+# ---------------------------------------------------------------------------
+
+
+@app.get("/analytics/user/{user_id}")
+async def get_user_analytics(user_id: str) -> dict[str, Any]:
+    """Return aggregated usage stats for a user from MongoDB."""
+    repo = get_repository()
+    if repo is None:
+        return {"session_count": 0, "messages_sent": 0, "liked": 0, "disliked": 0, "sounds_saved": 0}
+    return repo.get_user_analytics(user_id)
+
+
+# ---------------------------------------------------------------------------
+# /reports  — bug / feature / feedback reports
+# ---------------------------------------------------------------------------
+
+
+@app.post("/reports", status_code=201)
+async def create_report(body: UserReport) -> dict[str, Any]:
+    """Save a user-submitted bug report or feedback to MongoDB and Snowflake."""
+    repo = get_repository()
+    if repo is None:
+        return {"ok": False, "detail": "MongoDB not configured"}
+
+    doc = repo.create_report(body)
+
+    event = user_report_to_event(
+        user_id=body.user_id,
+        report_id=doc["report_id"],
+        report_type=body.type,
+        subject=body.subject,
+    )
+    asyncio.create_task(asyncio.to_thread(emit_events, [event]))
+
+    return {"ok": True, "report_id": doc["report_id"]}
 
 
 # ---------------------------------------------------------------------------

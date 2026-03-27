@@ -134,50 +134,14 @@ Choose your preferred AI assistant:
 5. **Update the path:** Replace `C:\\path\\to\\ableton-mcp-extended` with your actual installation path
 6. **Save** and **restart Claude Desktop**
 
-#### 🔍 Finding Your Installation Path
-**Windows:**
-```bash
-# In your ableton-mcp-extended folder, run:
-echo %CD%\MCP_Server\server.py
-```
+#### Direct Wonder Connection
 
-**macOS:**
-```bash
-# In your ableton-mcp-extended folder, run:
-echo $PWD/MCP_Server/server.py
-```
+Wonder now connects directly to the Ableton Remote Script on `localhost:9877`, so you do not need to configure the legacy `MCP_Server/server.py` wrapper in Claude Desktop or Cursor.
 
-### 🟡 Cursor IDE
-
-1. **Open Cursor**
-2. Go to **Settings** → **MCP**
-3. **Add new MCP server:**
-   - **Paste this**:
-
-```json
-{
-  "mcpServers": {
-    "AbletonMCP": {
-      "command": "python",
-      "args": [
-        "C:/path/to/ableton-mcp-extended/MCP_Server/server.py"
-      ]
-    }
-  }
-}
-```
-
-4. **Save settings**
-
-### Verify AI Connection
-
-**For Claude Desktop:**
-Look for a **🔨 hammer icon** in the chat interface - this indicates MCP tools are loaded.
-
-**For Cursor:**
-You'll see a green dot next to the MCP server icon, and a message saying "40 tools enabled".
-
-You might have to restart your AI assistant in order for changes to impact.
+To verify connection:
+- start the Wonder frontend
+- open Ableton with the `AbletonMCP` control surface enabled
+- confirm Wonder can read session state and create tracks
 
 ---
 
@@ -239,13 +203,9 @@ Add AI voice generation to your workflow:
    ```json
    {
      "mcpServers": {
-       "AbletonMCP": {
-         "command": "python",
-         "args": ["C:/path/to/MCP_Server/server.py"]
-       },
-       "ElevenLabs": {
-         "command": "python",
-         "args": ["C:/path/to/elevenlabs_mcp/server.py"],
+        "ElevenLabs": {
+          "command": "python",
+          "args": ["C:/path/to/elevenlabs_mcp/server.py"],
          "env": {
            "ELEVENLABS_API_KEY": "your-api-key-here"
          }
@@ -334,7 +294,7 @@ Add AI voice generation to your workflow:
 python --version
 
 # Test MCP server directly
-python MCP_Server/server.py
+npm run dev
 
 # Test Ableton connection (with Ableton running)
 python -c "import socket; s = socket.socket(); s.connect(('localhost', 9877)); print('✅ Connected')"

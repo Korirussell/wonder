@@ -5,11 +5,7 @@
 ### 1. Start All Services
 
 ```bash
-# Terminal 1: Ableton MCP Server (already running)
-cd /Users/kori/codecage/wonder/ableton-mcp
-python3 MCP_Server/server.py
-
-# Terminal 2: Frontend
+# Terminal 1: Frontend
 cd /Users/kori/codecage/wonder/frontend
 npm run dev
 
