@@ -10,8 +10,8 @@ interface AbletonContextValue {
 }
 
 const DEFAULT_SESSION: SessionState = {
-  bpm: 88,
-  key: "A Minor",
+  bpm: 120,
+  key: "F Minor",
   tracks: [],
   isPlaying: false,
 };

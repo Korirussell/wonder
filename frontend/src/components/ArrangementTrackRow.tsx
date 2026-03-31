@@ -3,21 +3,19 @@
 import { useEffect, useRef } from "react";
 import { Track, Clip } from "@/types";
 
-const TRACK_COLORS = [
-  { bg: "#C1E1C1", border: "#4a664c", text: "#2D2D2D", muted: "#a0bfa0" },
-  { bg: "#E9D5FF", border: "#7c3aed", text: "#2D2D2D", muted: "#c5a8e8" },
-  { bg: "#FEF08A", border: "#a16207", text: "#2D2D2D", muted: "#dfd07a" },
-  { bg: "#FECACA", border: "#dc2626", text: "#2D2D2D", muted: "#e0a8a8" },
-  { bg: "#BAE6FD", border: "#0284c7", text: "#2D2D2D", muted: "#96c8e0" },
-  { bg: "#FED7AA", border: "#ea580c", text: "#2D2D2D", muted: "#e0bb90" },
-  { bg: "#D1FAE5", border: "#059669", text: "#2D2D2D", muted: "#a8d8c0" },
-  { bg: "#F5D0FE", border: "#a21caf", text: "#2D2D2D", muted: "#d8a8e8" },
-];
+export const BAR_PX = 80;
+export const BEATS_PER_BAR = 4;
+export const ROW_HEIGHT = 72;
+export const LABEL_WIDTH = 200;
 
-const BAR_PX = 80;
-const BEATS_PER_BAR = 4;
-const ROW_HEIGHT = 64;
-const LABEL_WIDTH = 180;
+// Determine clip type by name (audio has file extension, MIDI doesn't)
+function isAudioClip(clipName: string): boolean {
+  return /\.(wav|aif|aiff|mp3|flac|ogg|m4a)$/i.test(clipName);
+}
+
+// Audio clip = sage green, MIDI clip = chartreuse/lime
+const AUDIO_CLIP = { bg: "#B8D4B4", border: "#6a9f6a", text: "#1e3820" };
+const MIDI_CLIP  = { bg: "#D4E860", border: "#8a9e20", text: "#2a3008" };
 
 interface Props {
   track: Track;
@@ -26,7 +24,7 @@ interface Props {
   onCommand: (cmd: string, params: Record<string, unknown>) => Promise<unknown> | void;
   clipPositions: Record<string, number>;
   onClipMove: (trackIndex: number, clipIndex: number, newLeft: number) => void;
-  snapBarPx: number | null; // highlighted snap bar position
+  snapBarPx: number | null;
   onSnapChange: (barLeft: number | null) => void;
 }
 
@@ -39,8 +37,6 @@ export default function ArrangementTrackRow({
   onClipMove,
   onSnapChange,
 }: Props) {
-  const color = TRACK_COLORS[trackIndex % TRACK_COLORS.length];
-
   const dragRef = useRef<{
     clipIndex: number;
     startMouseX: number;
@@ -56,7 +52,6 @@ export default function ArrangementTrackRow({
       if (Math.abs(delta) > 3) dragRef.current.moved = true;
       const newLeft = Math.max(0, startLeft + delta);
       onClipMove(trackIndex, clipIndex, newLeft);
-      // Report snap line for visual guide
       const snappedBar = Math.round(newLeft / BAR_PX);
       onSnapChange(snappedBar * BAR_PX);
     };
@@ -87,7 +82,12 @@ export default function ArrangementTrackRow({
     e.stopPropagation();
     const key = `${trackIndex}-${clip.index}`;
     const currentLeft = clipPositions[key] ?? baseLeft;
-    dragRef.current = { clipIndex: clip.index, startMouseX: e.clientX, startLeft: currentLeft, moved: false };
+    dragRef.current = {
+      clipIndex: clip.index,
+      startMouseX: e.clientX,
+      startLeft: currentLeft,
+      moved: false,
+    };
     document.body.style.cursor = "grabbing";
     document.body.style.userSelect = "none";
   };
@@ -101,124 +101,177 @@ export default function ArrangementTrackRow({
     }
   };
 
-  const handleMute = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onCommand("set_track_mute", { track_index: trackIndex, mute: !track.mute });
-  };
+  // Determine if this track is MIDI or audio based on its clips
+  const trackIsAudio = track.clips.some((c) => isAudioClip(c.name));
+
+  // Track number label (1-indexed, zero-padded)
+  const trackNum = String(trackIndex + 1).padStart(2, "0");
 
   return (
-    <div
-      className="flex flex-shrink-0 group"
-      style={{ height: ROW_HEIGHT }}
-    >
-      {/* Label */}
+    <div className="flex flex-shrink-0 group" style={{ height: ROW_HEIGHT }}>
+      {/* Label panel */}
       <div
-        className="flex-shrink-0 flex items-center gap-2 px-3 border-r-2 border-b border-[#2D2D2D] bg-stone-50 group-hover:bg-stone-100 transition-colors"
+        className="flex-shrink-0 flex flex-col justify-center px-3 border-r border-b border-[#E0E0E0] bg-[#FAFAFA] group-hover:bg-[#F3F3F1] transition-colors"
         style={{ width: LABEL_WIDTH }}
       >
-        {/* Color swatch + mute toggle */}
-        <button
-          onClick={handleMute}
-          title={track.mute ? "Unmute" : "Mute"}
-          className="w-3 h-3 rounded-full border border-[#2D2D2D] flex-shrink-0 transition-opacity hover:scale-125"
-          style={{ backgroundColor: track.mute ? "#ccc" : color.bg }}
-        />
-        <div className="flex flex-col min-w-0 flex-1">
+        {/* Top row: number + name + M/S/A */}
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-[11px] font-bold text-[#2D2D2D]/40 flex-shrink-0 select-none">
+            {trackNum}
+          </span>
           <span
-            className="font-headline font-extrabold text-[11px] uppercase tracking-tight truncate leading-tight"
-            style={{ opacity: track.mute ? 0.4 : 1 }}
+            className="font-mono text-[11px] font-bold uppercase tracking-tight truncate flex-1 select-none"
+            style={{ opacity: track.mute ? 0.35 : 1 }}
           >
             {track.name}
           </span>
-          {track.devices.length > 0 && (
-            <span className="font-mono text-[9px] text-stone-400 truncate">
-              {track.devices.slice(0, 2).join(" · ")}
-            </span>
-          )}
+          {/* M / S / A buttons */}
+          <div className="flex gap-1 flex-shrink-0">
+            <button
+              onClick={() => onCommand("set_track_mute", { track_index: trackIndex, mute: !track.mute })}
+              title="Mute"
+              className={`w-5 h-5 rounded text-[9px] font-bold font-mono flex items-center justify-center border transition-colors select-none ${
+                track.mute
+                  ? "bg-[#4a7ccc] border-[#3060b0] text-white"
+                  : "bg-[#E8E8E8] border-[#D0D0D0] text-[#555] hover:bg-[#D8D8D8]"
+              }`}
+            >
+              M
+            </button>
+            <button
+              onClick={() => onCommand("set_track_solo", { track_index: trackIndex, solo: !track.solo })}
+              title="Solo"
+              className={`w-5 h-5 rounded text-[9px] font-bold font-mono flex items-center justify-center border transition-colors select-none ${
+                track.solo
+                  ? "bg-[#e0c040] border-[#c0a020] text-[#2D2D2D]"
+                  : "bg-[#E8E8E8] border-[#D0D0D0] text-[#555] hover:bg-[#D8D8D8]"
+              }`}
+            >
+              S
+            </button>
+            <button
+              onClick={() => onCommand("set_track_arm", { track_index: trackIndex, armed: !track.armed })}
+              title="Arm for recording"
+              className={`w-5 h-5 rounded text-[9px] font-bold font-mono flex items-center justify-center border transition-colors select-none ${
+                track.armed
+                  ? "bg-[#e06830] border-[#c04810] text-white"
+                  : "bg-[#E8E8E8] border-[#D0D0D0] text-[#555] hover:bg-[#D8D8D8]"
+              }`}
+            >
+              A
+            </button>
+          </div>
         </div>
-        {/* Clip count badge */}
-        {track.clips.length > 0 && (
-          <span className="font-mono text-[9px] font-bold text-stone-400 flex-shrink-0">
-            {track.clips.length}
+
+        {/* Bottom row: IN/OUT routing */}
+        <div className="flex items-center gap-2 mt-[3px]">
+          <span className="font-mono text-[8.5px] text-[#2D2D2D]/35 tracking-wide select-none">
+            IN: {trackIsAudio ? "ALL INS" : "MIDI"}&nbsp;&nbsp;OUT: MASTER
           </span>
-        )}
+        </div>
       </div>
 
       {/* Clip lane */}
       <div
-        className="relative border-b border-[#2D2D2D]/15 bg-[#FDFDFB]"
-        style={{ width: totalBars * BAR_PX, opacity: track.mute ? 0.45 : 1 }}
+        className="relative border-b border-[#E8E8E8] bg-[#F8F8F6]"
+        style={{ width: totalBars * BAR_PX, opacity: track.mute ? 0.4 : 1 }}
       >
-        {/* Bar grid lines */}
+        {/* Bar grid */}
         {Array.from({ length: totalBars }).map((_, bar) => (
           <div
             key={bar}
-            className={`absolute top-0 bottom-0 ${bar % 4 === 0 ? "border-l border-[#2D2D2D]/20" : "border-l border-[#2D2D2D]/6"}`}
-            style={{ left: bar * BAR_PX }}
+            className="absolute top-0 bottom-0"
+            style={{
+              left: bar * BAR_PX,
+              borderLeft: bar % 4 === 0
+                ? "1px solid rgba(45,45,45,0.12)"
+                : "1px solid rgba(45,45,45,0.05)",
+            }}
           />
         ))}
 
-        {/* Clip blocks */}
+        {/* Clips */}
         {track.clips.map((clip) => {
           const barsFromStart = (clip.index * clip.length) / BEATS_PER_BAR;
           const clipWidthBars = clip.length / BEATS_PER_BAR;
           const baseLeft = barsFromStart * BAR_PX;
           const key = `${trackIndex}-${clip.index}`;
-          const left = clipPositions[key] ?? baseLeft + 2;
-          const width = Math.max(clipWidthBars * BAR_PX - 4, 20);
+          const left = clipPositions[key] ?? baseLeft + 1;
+          const width = Math.max(clipWidthBars * BAR_PX - 2, 20);
+          const color = isAudioClip(clip.name) ? AUDIO_CLIP : MIDI_CLIP;
+          const isMidi = !isAudioClip(clip.name);
 
           return (
             <div
               key={clip.index}
-              onMouseDown={(e) => handleClipMouseDown(e, clip, baseLeft + 2)}
+              onMouseDown={(e) => handleClipMouseDown(e, clip, baseLeft + 1)}
               onClick={() => handleClipClick(clip)}
               title={clip.isPlaying ? `Stop "${clip.name}"` : `Fire "${clip.name}"`}
-              className="absolute top-2 bottom-2 rounded-lg border-2 border-[#2D2D2D] flex items-center px-2 overflow-hidden cursor-grab active:cursor-grabbing select-none transition-[box-shadow,filter]"
+              className="absolute top-[6px] bottom-[6px] rounded-md flex items-center px-2 overflow-hidden cursor-grab active:cursor-grabbing select-none"
               style={{
                 left,
                 width,
                 backgroundColor: color.bg,
+                border: `1px solid ${color.border}`,
                 boxShadow: clip.isPlaying
-                  ? `0 0 0 2px ${color.border}, 2px 2px 0 0 #2D2D2D`
-                  : "2px 2px 0 0 #2D2D2D",
-                filter: clip.isPlaying ? "brightness(1.05)" : undefined,
+                  ? `0 0 0 2px ${color.border}`
+                  : undefined,
               }}
             >
-              {clip.isPlaying && (
-                <span
-                  className="absolute inset-0 rounded-lg animate-ping opacity-20"
-                  style={{ backgroundColor: color.border }}
-                />
+              {/* MIDI clip: horizontal lines pattern */}
+              {isMidi && (
+                <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-20">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <div
+                      key={i}
+                      className="absolute left-0 right-0"
+                      style={{
+                        top: `${18 + i * 14}%`,
+                        height: "2px",
+                        backgroundColor: color.border,
+                      }}
+                    />
+                  ))}
+                </div>
               )}
-              {/* Waveform decoration lines */}
-              <div className="absolute inset-y-2 left-2 right-8 flex items-center gap-[2px] overflow-hidden pointer-events-none opacity-25">
-                {Array.from({ length: Math.floor(width / 5) }).map((_, i) => (
-                  <div
-                    key={i}
-                    className="w-[2px] rounded-full flex-shrink-0"
-                    style={{
-                      height: `${30 + ((i * 7 + trackIndex * 3) % 55)}%`,
-                      backgroundColor: color.border,
-                    }}
-                  />
-                ))}
-              </div>
-              <span className="relative font-mono text-[10px] font-bold truncate z-10" style={{ color: color.text }}>
-                {clip.isPlaying ? "▶ " : ""}{clip.name}
+
+              {/* Audio clip: waveform bars */}
+              {!isMidi && (
+                <div className="absolute inset-y-2 left-2 right-16 flex items-center gap-[2px] overflow-hidden pointer-events-none opacity-30">
+                  {Array.from({ length: Math.floor(width / 4) }).map((_, i) => (
+                    <div
+                      key={i}
+                      className="w-[2px] rounded-full flex-shrink-0"
+                      style={{
+                        height: `${25 + ((i * 11 + trackIndex * 7) % 60)}%`,
+                        backgroundColor: color.border,
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {/* Clip name */}
+              <span
+                className="relative font-mono text-[9.5px] font-bold truncate z-10 flex items-center gap-1"
+                style={{ color: color.text }}
+              >
+                {clip.name === "MIDNIGHT SYNTH LEAD" && (
+                  <span className="opacity-70">✦</span>
+                )}
+                {clip.isPlaying ? "▶ " : ""}
+                {clip.name}
               </span>
             </div>
           );
         })}
 
-        {/* Empty lane hint */}
         {track.clips.length === 0 && (
           <div className="absolute inset-0 flex items-center pl-4">
-            <span className="font-mono text-[9px] text-stone-300">empty</span>
+            <span className="font-mono text-[9px] text-[#2D2D2D]/20">empty</span>
           </div>
         )}
       </div>
     </div>
   );
 }
-
-export { BAR_PX, LABEL_WIDTH, ROW_HEIGHT, BEATS_PER_BAR };

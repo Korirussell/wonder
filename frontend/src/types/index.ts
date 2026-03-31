@@ -38,6 +38,13 @@ export interface ChatResponse {
   suggestions?: string[];
 }
 
+export interface AudioAttachment {
+  filename: string;
+  base64: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -46,6 +53,7 @@ export interface ChatMessage {
   isGreeting?: boolean; // If true, don't send to Gemini (just display)
   toolLog?: ToolLogEntry[];
   suggestions?: string[];
+  audioAttachment?: AudioAttachment;
 }
 
 export interface TranscribedNote {
